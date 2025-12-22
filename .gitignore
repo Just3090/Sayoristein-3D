@@ -26,3 +26,5 @@
 /strings.json
 
 .vscode/
+**.keystore
+android.json
