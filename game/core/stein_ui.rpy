@@ -76,7 +76,7 @@ screen sayoristein_menu():
         yalign 0.5
         spacing 15
 
-        textbutton _("Play") action ShowMenu("sayoristein_level_select") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
+        textbutton _("Play") action ShowMenu("sayoristein_arena_hub") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
         textbutton _("Settings") action ShowMenu("sayoristein_settings_menu") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
         textbutton _("Exit") action Quit() style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
 
@@ -509,9 +509,7 @@ screen sayoristein_upgrades():
                 xalign 0.5
                 xsize 365
                 
-                add "pics/items/bullet.png":
-                    xalign 0.5
-                    zoom 2.0
+                
                 
                 text _("Pistol") xalign 0.5 size 30 color "#ffffff" font "mod_assets/fonts/BebasNeue-Regular.ttf"
                 
@@ -527,9 +525,7 @@ screen sayoristein_upgrades():
                 xalign 0.5
                 xsize 365
                 
-                add "pics/items/bullet.png":
-                    xalign 0.5
-                    zoom 2.0
+                
                 
                 text _("Shotgun") xalign 0.5 size 30 color "#ffffff" font "mod_assets/fonts/BebasNeue-Regular.ttf"
                 
@@ -549,9 +545,7 @@ screen sayoristein_upgrades():
                 xalign 0.5
                 xsize 365
                 
-                add "pics/items/bullet.png":
-                    xalign 0.5
-                    zoom 2.0
+                
                 
                 text _("Minigun") xalign 0.5 size 30 color "#ffffff" font "mod_assets/fonts/BebasNeue-Regular.ttf"
                 
