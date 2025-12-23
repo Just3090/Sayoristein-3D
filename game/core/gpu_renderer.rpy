@@ -113,21 +113,21 @@ init 10 python:
     """, fragment_300="""
         const int MAX_STEPS = 128; 
         
-        vec2 uv = v_tex_coord;
+        vec2 stein_uv = v_tex_coord;
 
         // RAY GENERATION (3D)
         // Player Position (Camera Origin). Z=0.5 is eye level + offsets
         vec3 rayPos = vec3(u_player_pos.x, u_player_pos.y, 0.5 + u_z_offset);
         
         // Ray Direction
-        float cameraX = 2.0 * uv.x - 1.0; 
+        float cameraX = 2.0 * stein_uv.x - 1.0; 
         vec2 rayDirXY = u_player_dir + u_player_plane * cameraX;
         
         // Map screen Y (0..1) to vertical view angle (slope)
         // Center (0.5) is straight ahead (slope 0)
-        // 0.5 - uv.y gives range [0.5, -0.5]
+        // 0.5 - stein_uv.y gives range [0.5, -0.5]
         // Scale by vertical FOV (u_vertical_scale) and add pitch (look up/down)
-        float screenY = (0.5 - uv.y) * 2.0; 
+        float screenY = (0.5 - stein_uv.y) * 2.0; 
         float rayDirZ = (screenY / u_vertical_scale) + u_pitch;
         
         vec3 rayDir = normalize(vec3(rayDirXY, rayDirZ));
@@ -445,7 +445,7 @@ init 10 python:
                 }
             } else {
                 // Skybox
-                vec2 skyUV = uv;
+                vec2 skyUV = stein_uv;
                 // Apply pitch to skyUV.y
                 skyUV.y -= u_pitch; 
                 skyUV.y = clamp(skyUV.y, 0.0, 1.0);
@@ -510,8 +510,8 @@ init 10 python:
             float drawStartX = spriteScreenX - spriteWidth / 2.0;
             float drawEndX = spriteScreenX + spriteWidth / 2.0;
 
-            float currentPixelX = uv.x * u_resolution.x; 
-            float currentPixelY = uv.y * u_resolution.y;
+            float currentPixelX = stein_uv.x * u_resolution.x; 
+            float currentPixelY = stein_uv.y * u_resolution.y;
 
             if (currentPixelX >= drawStartX && currentPixelX <= drawEndX) {
                 float texX = (currentPixelX - drawStartX) / spriteWidth;
@@ -641,19 +641,19 @@ init 10 python:
         uniform float u_blur_amount;
         varying vec2 v_tex_coord;
     """, fragment_200="""
-        vec2 mb_uv = v_tex_coord;
-        vec4 mb_color = texture2D(tex0, mb_uv);
+        vec2 stein_mb_uv = v_tex_coord;
+        vec4 mb_color = texture2D(tex0, stein_mb_uv);
         
         if (abs(u_blur_amount) > 0.001) {
             float blur = u_blur_amount * 0.02;
             vec4 sum = vec4(0.0);
             
             // 5-tap optimization
-            sum += texture2D(tex0, vec2(mb_uv.x - blur * 2.0, mb_uv.y)) * 0.1;
-            sum += texture2D(tex0, vec2(mb_uv.x - blur * 1.0, mb_uv.y)) * 0.25;
-            sum += texture2D(tex0, vec2(mb_uv.x, mb_uv.y)) * 0.3;
-            sum += texture2D(tex0, vec2(mb_uv.x + blur * 1.0, mb_uv.y)) * 0.25;
-            sum += texture2D(tex0, vec2(mb_uv.x + blur * 2.0, mb_uv.y)) * 0.1;
+            sum += texture2D(tex0, vec2(stein_mb_uv.x - blur * 2.0, stein_mb_uv.y)) * 0.1;
+            sum += texture2D(tex0, vec2(stein_mb_uv.x - blur * 1.0, stein_mb_uv.y)) * 0.25;
+            sum += texture2D(tex0, vec2(stein_mb_uv.x, stein_mb_uv.y)) * 0.3;
+            sum += texture2D(tex0, vec2(stein_mb_uv.x + blur * 1.0, stein_mb_uv.y)) * 0.25;
+            sum += texture2D(tex0, vec2(stein_mb_uv.x + blur * 2.0, stein_mb_uv.y)) * 0.1;
             
             gl_FragColor = sum;
         } else {
@@ -673,12 +673,12 @@ init 10 python:
         v_tex_coord = a_tex_coord;
     """, fragment_200="""
         // Center UVs to [-1, 1] range
-        vec2 uv = (v_tex_coord - 0.5) * 2.0; 
+        vec2 stein_w_uv = (v_tex_coord - 0.5) * 2.0; 
         
         // Internal rotation
         float s = sin(u_flash_angle);
         float c = cos(u_flash_angle);
-        vec2 rotated_uv = mat2(c, -s, s, c) * uv;
+        vec2 rotated_uv = mat2(c, -s, s, c) * stein_w_uv;
         
         float dist = length(rotated_uv);
         float angle = atan(rotated_uv.y, rotated_uv.x);
@@ -705,7 +705,7 @@ init 10 python:
             float smoke_p = (u_flash_progress - 0.02) / 0.98;
             
             // Use unrotated UV so smoke always rises UP relative to screen
-            vec2 stream_uv = uv;
+            vec2 stream_uv = stein_w_uv;
             
             // Detach from bottom logic (Smoke moves up/away from barrel)
             // We mask out the bottom part, and this mask moves up over time
@@ -728,8 +728,8 @@ init 10 python:
             float height_mask = smoothstep(-0.95, -0.2, stream_uv.y); 
             
             // Scroll noise up through the stream
-            float noise_y = uv.y + u_flash_progress * 3.0;
-            float noise = sin(uv.x * 40.0) * sin(noise_y * 12.0);
+            float noise_y = stein_w_uv.y + u_flash_progress * 3.0;
+            float noise = sin(stein_w_uv.x * 40.0) * sin(noise_y * 12.0);
             
             // Overall fade out over time
             float fade_out = 1.0 - smoothstep(0.2, 0.9, smoke_p);
@@ -778,8 +778,8 @@ init 10 python:
         uniform vec2 u_resolution;
         varying vec2 v_tex_coord;
     """, fragment_200="""
-        vec2 uv = v_tex_coord;
-        vec4 source = texture2D(tex0, uv);
+        vec2 stein_bloom_uv = v_tex_coord;
+        vec4 source = texture2D(tex0, stein_bloom_uv);
         
         float bloomSpread = 4.0;
         float threshold = 0.8;
@@ -791,7 +791,7 @@ init 10 python:
         for (float i = -1.0; i <= 1.0; i++) {
             for (float j = -1.0; j <= 1.0; j++) {
                 vec2 offset = vec2(i, j) * bloomSpread * size;
-                vec4 col = texture2D(tex0, uv + offset);
+                vec4 col = texture2D(tex0, stein_bloom_uv + offset);
                 
                 float brightness = dot(col.rgb, vec3(0.2126, 0.7152, 0.0722));
                 if (brightness > threshold) {

@@ -23,5 +23,7 @@ label splashscreen:
 
         basedir = config.basedir.replace("\\", "/")
 
+    call screen shader_warmup
+
     jump sayoristein_main_menu
 
