@@ -21,13 +21,14 @@ screen stein_controls_overlay():
             textbutton _("Touch & Gamepad") action SetVariable("simulate_touch", True)
 
     if persistent.stein_show_fps:
-        text "FPS: [stein_current_fps]":
+        add DynamicDisplayable(stein_fps_displayable):
             xalign 0.98
             yalign 0.02
-            size 30
-            color "#607567"
-            outlines [(2, "#000000", 0, 0)]
-            font "mod_assets/fonts/BebasNeue-Regular.ttf"
+
+    # Temporary Debug Display
+    add DynamicDisplayable(gamepad_debug_displayable):
+        xalign 0.99
+        yalign 0.5
 
 # Style for the text inside the buttons on this screen.
 style stein_controls_overlay_textbutton_text:
@@ -77,7 +78,7 @@ screen sayoristein_menu():
 
         textbutton _("Play") action ShowMenu("sayoristein_level_select") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
         textbutton _("Settings") action ShowMenu("sayoristein_settings_menu") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
-        textbutton _("Exit") action Quit() style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
+        textbutton _("Exit") action Return() style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
 
 screen sayoristein_settings_menu():
     tag menu
@@ -160,6 +161,19 @@ screen sayoristein_settings_menu():
                     vbox:
                         spacing 10
                         xalign 0.5
+                        text _("Lighting") style "stein_settings_header"
+                        
+                        hbox:
+                            spacing 15
+                            xalign 0.5
+                            textbutton _("High") action SetVariable("persistent.stein_lighting_quality", 0) style "sayoristein_menu_button" text_style "sayoristein_menu_button_text" text_color ("#00FF00" if persistent.stein_lighting_quality == 0 else "#FFFFFF")
+                            textbutton _("Low") action SetVariable("persistent.stein_lighting_quality", 1) style "sayoristein_menu_button" text_style "sayoristein_menu_button_text" text_color ("#00FF00" if persistent.stein_lighting_quality == 1 else "#FFFFFF")
+
+                    null height 10
+
+                    vbox:
+                        spacing 10
+                        xalign 0.5
                         text _("Post-Processing") style "stein_settings_header"
                         
                         textbutton ("Bloom Effect: " + ("ON" if persistent.stein_enable_bloom else "OFF")):
@@ -167,10 +181,40 @@ screen sayoristein_settings_menu():
                             style "sayoristein_menu_button"
                             text_style "sayoristein_menu_button_text"
 
-                        textbutton ("Soft Shadows: " + ("ON" if persistent.stein_soft_shadows else "OFF")):
-                            action ToggleVariable("persistent.stein_soft_shadows")
+                        textbutton ("Volumetric Clouds: " + ("ON" if persistent.stein_volumetric_clouds else "OFF")):
+                            action ToggleVariable("persistent.stein_volumetric_clouds")
                             style "sayoristein_menu_button"
                             text_style "sayoristein_menu_button_text"
+
+                        if persistent.stein_lighting_quality == 0:
+                            textbutton ("Shadows: " + ("ON" if persistent.stein_enable_shadows else "OFF")):
+                                action [ToggleVariable("persistent.stein_enable_shadows"), Function(lambda: setattr(persistent, "stein_soft_shadows", False) if not persistent.stein_enable_shadows else None)]
+                                style "sayoristein_menu_button"
+                                text_style "sayoristein_menu_button_text"
+
+                            if persistent.stein_enable_shadows:
+                                textbutton ("Soft Shadows: " + ("ON" if persistent.stein_soft_shadows else "OFF")):
+                                    action ToggleVariable("persistent.stein_soft_shadows")
+                                    style "sayoristein_menu_button"
+                                    text_style "sayoristein_menu_button_text"
+                            else:
+                                textbutton _("Soft Shadows: LOCKED"):
+                                    action None
+                                    style "sayoristein_menu_button"
+                                    text_style "sayoristein_menu_button_text"
+                                    text_color "#888888"
+                        else:
+                            textbutton _("Shadows: DISABLED (Low)"):
+                                action None
+                                style "sayoristein_menu_button"
+                                text_style "sayoristein_menu_button_text"
+                                text_color "#888888"
+                            
+                            textbutton _("Soft Shadows: DISABLED"):
+                                action None
+                                style "sayoristein_menu_button"
+                                text_style "sayoristein_menu_button_text"
+                                text_color "#888888"
 
                         # textbutton ("Heat Distortion: " + ("ON" if persistent.stein_heat_distortion else "OFF")):
                         #     action ToggleVariable("persistent.stein_heat_distortion")
@@ -315,17 +359,78 @@ screen sayoristein_arena_hub():
         textbutton _("Back") action ShowMenu("sayoristein_level_select") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
 
 init python:
+    if getattr(persistent, "stein_lighting_quality", None) is None:
+        persistent.stein_lighting_quality = 0 # 0=High, 1=Low
+
+    if getattr(persistent, "stein_volumetric_clouds", None) is None:
+        persistent.stein_volumetric_clouds = False
+
     if getattr(persistent, "stein_motion_blur_strength", None) is None:
-        persistent.stein_motion_blur_strength = 0.0
+        persistent.stein_motion_blur_strength = 0.3
     
     if getattr(persistent, "stein_soft_shadows", None) is None:
-        persistent.stein_soft_shadows = True
+        persistent.stein_soft_shadows = False
+
+    if getattr(persistent, "stein_enable_shadows", None) is None:
+        persistent.stein_enable_shadows = False
 
     if getattr(persistent, "stein_flashlight_shadows", None) is None:
         persistent.stein_flashlight_shadows = False
 
     if getattr(persistent, "stein_heat_distortion", None) is None:
-        persistent.stein_heat_distortion = True
+        persistent.stein_heat_distortion = False
+
+    def stein_fps_displayable(st, at):
+        fps = getattr(renpy.store, 'stein_current_fps', 0)
+        return Text(f"FPS: {fps}", size=30, color="#607567", outlines=[(2, "#000000", 0, 0)], font="mod_assets/fonts/BebasNeue-Regular.ttf"), 0.01
+
+    def gamepad_debug_displayable(st, at):
+        import pygame
+        debug_info = ["--- GAMEPAD DEBUG ---"]
+        
+        count = pygame.joystick.get_count()
+        if count == 0:
+            debug_info.append("No Gamepads Detected")
+        else:
+            for i in range(count):
+                try:
+                    joy = pygame.joystick.Joystick(i)
+                    if not joy.get_init():
+                        joy.init()
+                    
+                    debug_info.append(f"ID {i}: {joy.get_name()}")
+                    
+                    # Axes
+                    axes_str = []
+                    for a in range(joy.get_numaxes()):
+                        val = joy.get_axis(a)
+                        if abs(val) > 0.01: 
+                            axes_str.append(f"A{a}: {val:.2f}")
+                    if axes_str:
+                        debug_info.append("  Axes: " + ", ".join(axes_str))
+                    
+                    # Buttons
+                    btns_str = []
+                    for b in range(joy.get_numbuttons()):
+                        if joy.get_button(b):
+                            btns_str.append(f"B{b}")
+                    if btns_str:
+                        debug_info.append("  Btns: " + ", ".join(btns_str))
+                    
+                    # Hats
+                    hats_str = []
+                    for h in range(joy.get_numhats()):
+                        val = joy.get_hat(h)
+                        if val != (0,0):
+                            hats_str.append(f"H{h}: {val}")
+                    if hats_str:
+                        debug_info.append("  Hats: " + ", ".join(hats_str))
+                        
+                    debug_info.append("")
+                except Exception as e:
+                    debug_info.append(f"Err: {e}")
+
+        return Text("\n".join(debug_info), size=22, color="#00FF00", outlines=[(2, "#000000", 0, 0)], font="mod_assets/fonts/BebasNeue-Regular.ttf"), 0.05
 
     def buy_stein_upgrade(upgrade_type):
         if upgrade_type == "pistol":

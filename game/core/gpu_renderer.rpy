@@ -1,3 +1,44 @@
+# TODO:
+######## Android
+
+# if a xbox gamepad is connected in android, the Axis are mapped like Xbox PC, but
+# the other buttons are normally Android gamepad, not like PC.
+
+# Other Android gamepad are mapped like:
+
+### Joysticks
+
+# LeftUp=A4 0 to minus 1
+# LeftDown=A4 0 to 1
+# LeftLeft=A0 0 to minus 1
+# LeftRight=A0 0 to 1
+
+# RightUp=A3 0 to minus 1
+# RightDown=A3 0 to 1
+# RightLeft=A2 0 to minus 1
+# RightRight=A2 0 to 1
+
+### Buttons
+
+# L3=B7
+# R3=B8
+# Select=B4
+# Start=B6
+# A=B0
+# B=B1
+# X=B2
+# Y=B3
+# L1=B9
+# L2=B15
+# R1=B10
+# R2=B16
+
+### D-Pad
+# Up=B11
+# Down=B12
+# Left=B13
+# Right=B14
+
 init 10 python:
     SLOT_MELEE   = 0
     SLOT_HANDGUN = 1
@@ -5,6 +46,8 @@ init 10 python:
     SLOT_SPECIAL = 3
 
     renpy.register_shader("stein.raycaster", variables="""
+        uniform float u_volumetric_clouds;
+        uniform float u_time_of_day;
         uniform float u_time;
         uniform vec2 u_resolution;
         uniform vec2 u_player_pos;
@@ -30,14 +73,46 @@ init 10 python:
         uniform float u_flashlight_active;
         uniform vec2 u_flashlight_bob;
         uniform float u_soft_shadows;
+        uniform float u_enable_shadows;
+        uniform float u_max_dist;
+        uniform float u_simple_floor;
+        uniform vec3 u_ambient_color;
+        uniform vec3 u_ambient_near_color;
         varying vec2 v_tex_coord;
         attribute vec2 a_tex_coord;
     """, vertex_200="""
         v_tex_coord = a_tex_coord;
+    """, fragment_functions="""
+        float hash(vec2 p) {
+            p = fract(p * vec2(123.34, 456.21));
+            p += dot(p, p + 45.32);
+            return fract(p.x * p.y);
+        }
+
+        float noise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            f = f * f * (3.0 - 2.0 * f);
+            float a = hash(i);
+            float b = hash(i + vec2(1.0, 0.0));
+            float c = hash(i + vec2(0.0, 1.0));
+            float d = hash(i + vec2(1.0, 1.0));
+            return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+        }
+
+        float fbm(vec2 p) {
+            float v = 0.0;
+            float a = 0.5;
+            for (int i = 0; i < 5; i++) {
+                v += a * noise(p);
+                p *= 2.0;
+                a *= 0.5;
+            }
+            return v;
+        }
     """, fragment_300="""
         const int MAX_STEPS = 128; 
-        const float MAX_DIST = 60.0;
-
+        
         vec2 uv = v_tex_coord;
 
         // RAY GENERATION (3D)
@@ -110,7 +185,7 @@ init 10 python:
                 }
             }
             
-            if (rayDist > MAX_DIST) { hit = 2; break; } // Too far
+            if (rayDist > u_max_dist) { hit = 2; break; } // Too far
             
             // Map Bounds Check
             if (mapPos.x < 0 || mapPos.x >= int(u_map_size.x) || mapPos.y < 0 || mapPos.y >= int(u_map_size.y)) {
@@ -142,9 +217,13 @@ init 10 python:
             vec3 hitPos = rayPos + rayDir * rayDist;
             
             if (side == 2 && mapPos.z == -1) {
-                vec2 floorUV = vec2(fract(hitPos.x), fract(hitPos.y));
-                color = texture2D(u_floor_texture, floorUV, -1.0).rgb;
-                color *= 0.6;
+                if (u_simple_floor > 0.5) {
+                    color = vec3(0.25, 0.25, 0.28);
+                } else {
+                    vec2 floorUV = vec2(fract(hitPos.x), fract(hitPos.y));
+                    color = texture2D(u_floor_texture, floorUV, -1.0).rgb;
+                    color *= 0.6;
+                }
             } else {
                 vec2 texUV;
                 if (side == 0) { // X-Side
@@ -182,10 +261,10 @@ init 10 python:
             
             float fogDist = length(hitPos.xy - u_player_pos);
             
-            vec3 ambientLight = vec3(0.02, 0.02, 0.05); 
+            vec3 ambientLight = u_ambient_color; 
             
             float personalLight = max(0.0, 1.0 - (fogDist / 4.0)); 
-            ambientLight += vec3(0.05, 0.05, 0.08) * personalLight;
+            ambientLight += u_ambient_near_color * personalLight;
             
             vec3 totalLight = ambientLight;
 
@@ -225,60 +304,64 @@ init 10 python:
                 float distToLight = distance(hitPos.xy, lightPos);
                 
                 if (distToLight < radius) {
-                    float visibility = 0.0;
-                    int samples = 1;
-                    float spread = 0.0;
+                    float visibility = 1.0;
                     
-                    if (u_soft_shadows > 0.5) {
-                        samples = 9;
-                        spread = 0.55;
-                    }
-                    
-                    vec2 dirToLight = normalize(lightPos - hitPos.xy);
-                    vec2 perp = vec2(-dirToLight.y, dirToLight.x) * spread;
-                    
-                    for (int k = 0; k < 9; k++) {
-                        if (k >= samples) break;
+                    if (u_enable_shadows > 0.5) {
+                        visibility = 0.0;
+                        int samples = 1;
+                        float spread = 0.0;
                         
-                        float offScale = 0.0;
-                        if (k == 1) offScale = 1.0;
-                        if (k == 2) offScale = -1.0;
-                        if (k == 3) offScale = 0.5;
-                        if (k == 4) offScale = -0.5;
-                        if (k == 5) offScale = 0.75;
-                        if (k == 6) offScale = -0.75;
-                        if (k == 7) offScale = 0.25;
-                        if (k == 8) offScale = -0.25;
-                        
-                        vec2 offset = perp * offScale;
-                        
-                        vec2 targetPos = lightPos + offset;
-                        vec2 rayDir = normalize(targetPos - hitPos.xy);
-                        float rayDist = distance(targetPos, hitPos.xy);
-                        
-                        float stepSize = 0.2;
-                        int steps = int(rayDist / stepSize);
-                        vec2 checkPos = hitPos.xy + rayDir * 0.1;
-                        bool hitWall = false;
-                        
-                        for(int s=0; s<64; s++) { 
-                            if (s >= steps) break;
-                            checkPos += rayDir * stepSize;
-                            
-                            if (abs(floor(checkPos.x) - float(mapPos.x)) < 0.1 && abs(floor(checkPos.y) - float(mapPos.y)) < 0.1) continue;
-
-                            vec2 mapUV = (floor(checkPos) + 0.5) / u_map_size;
-                            mapUV *= u_map_uv_scale;
-                            if (texture2D(u_map_texture, mapUV).r > 0.5) {
-                                hitWall = true;
-                                break;
-                            }
+                        if (u_soft_shadows > 0.5) {
+                            samples = 9;
+                            spread = 0.55;
                         }
                         
-                        if (!hitWall) visibility += 1.0;
+                        vec2 dirToLight = normalize(lightPos - hitPos.xy);
+                        vec2 perp = vec2(-dirToLight.y, dirToLight.x) * spread;
+                        
+                        for (int k = 0; k < 9; k++) {
+                            if (k >= samples) break;
+                            
+                            float offScale = 0.0;
+                            if (k == 1) offScale = 1.0;
+                            if (k == 2) offScale = -1.0;
+                            if (k == 3) offScale = 0.5;
+                            if (k == 4) offScale = -0.5;
+                            if (k == 5) offScale = 0.75;
+                            if (k == 6) offScale = -0.75;
+                            if (k == 7) offScale = 0.25;
+                            if (k == 8) offScale = -0.25;
+                            
+                            vec2 offset = perp * offScale;
+                            
+                            vec2 targetPos = lightPos + offset;
+                            vec2 rayDir = normalize(targetPos - hitPos.xy);
+                            float rayDist = distance(targetPos, hitPos.xy);
+                            
+                            float stepSize = 0.2;
+                            int steps = int(rayDist / stepSize);
+                            vec2 checkPos = hitPos.xy + rayDir * 0.1;
+                            bool hitWall = false;
+                            
+                            for(int s=0; s<64; s++) { 
+                                if (s >= steps) break;
+                                checkPos += rayDir * stepSize;
+                                
+                                if (abs(floor(checkPos.x) - float(mapPos.x)) < 0.1 && abs(floor(checkPos.y) - float(mapPos.y)) < 0.1) continue;
+
+                                vec2 mapUV = (floor(checkPos) + 0.5) / u_map_size;
+                                mapUV *= u_map_uv_scale;
+                                if (texture2D(u_map_texture, mapUV).r > 0.5) {
+                                    hitWall = true;
+                                    break;
+                                }
+                            }
+                            
+                            if (!hitWall) visibility += 1.0;
+                        }
+                        
+                        visibility /= float(samples);
                     }
-                    
-                    visibility /= float(samples);
 
                     if (visibility > 0.0) {
                         float att = 1.0 - (distToLight / radius);
@@ -297,12 +380,77 @@ init 10 python:
             color = finalColor * totalLight * faceShadow;
 
         } else {
-            // Skybox
-            vec2 skyUV = uv;
-            // Apply pitch to skyUV.y
-            skyUV.y -= u_pitch; 
-            skyUV.y = clamp(skyUV.y, 0.0, 1.0);
-            color = texture2D(u_sky_texture, skyUV).rgb;
+            if (u_volumetric_clouds > 0.5) {
+                vec3 skyColorTop;
+                vec3 skyColorBottom;
+                vec3 cloudColor;
+                
+                if (u_time_of_day < 0.5) { // Night
+                    skyColorTop = vec3(0.0, 0.0, 0.1);
+                    skyColorBottom = vec3(0.05, 0.05, 0.2);
+                    cloudColor = vec3(0.1, 0.1, 0.15);
+                } else if (u_time_of_day < 1.5) { // Day
+                    skyColorTop = vec3(0.0, 0.4, 0.8);
+                    skyColorBottom = vec3(0.6, 0.8, 1.0);
+                    cloudColor = vec3(1.0, 1.0, 1.0);
+                } else { // Afternoon
+                    skyColorTop = vec3(0.2, 0.1, 0.4);
+                    skyColorBottom = vec3(1.0, 0.4, 0.2);
+                    cloudColor = vec3(1.0, 0.6, 0.5);
+                }
+
+                float skyGradient = smoothstep(-0.5, 0.5, rayDir.z);
+                vec3 skyBase = mix(skyColorBottom, skyColorTop, skyGradient);
+                
+                color = skyBase;
+
+                if (rayDir.z > 0.01) {
+                    vec2 cloudUV = rayDir.xy / rayDir.z;
+                    cloudUV += u_time * 0.05;
+                    
+                    float n = fbm(cloudUV * 0.5);
+                    float c = smoothstep(0.4, 0.8, n);
+                    c *= smoothstep(0.0, 0.2, rayDir.z);
+                    
+                    color = mix(color, cloudColor, c);
+                }
+                
+                if (u_time_of_day < 0.5 && rayDir.z > 0.01) {
+                    vec2 starUV = rayDir.xy / (1.0 + rayDir.z);
+                    
+                    float scale = 300.0; 
+                    vec2 gridUV = starUV * scale;
+                    vec2 gridID = floor(gridUV);
+                    vec2 gridLocal = fract(gridUV) - 0.5;
+                    
+                    float h = hash(gridID);
+                    
+                    if (h > 0.97) {
+                        // Stable random position in cell
+                        float r1 = hash(gridID + vec2(12.34, 56.78));
+                        float r2 = hash(gridID + vec2(90.12, 34.56));
+                        vec2 pos = (vec2(r1, r2) - 0.5) * 0.7;
+                        
+                        float dist = length(gridLocal - pos);
+                        
+                        float brightness = smoothstep(0.4, 0.1, dist);
+                        
+                        float twinkle = 0.7 + 0.3 * sin(u_time * 2.0 + h * 50.0);
+                        
+                        // Horizon fade
+                        float fade = smoothstep(0.01, 0.1, rayDir.z);
+                        
+                        color += vec3(brightness * twinkle * fade);
+                    }
+                }
+            } else {
+                // Skybox
+                vec2 skyUV = uv;
+                // Apply pitch to skyUV.y
+                skyUV.y -= u_pitch; 
+                skyUV.y = clamp(skyUV.y, 0.0, 1.0);
+                color = texture2D(u_sky_texture, skyUV).rgb;
+            }
         }
 
         // SPRITE RENDERING (Adapted for 3D)
@@ -381,9 +529,9 @@ init 10 python:
                         
                         float sprDist = length(vec2(spX, spY)); 
                         
-                        vec3 sprLight = vec3(0.02, 0.02, 0.05);
+                        vec3 sprLight = u_ambient_color;
                         float sprPersonal = max(0.0, 1.0 - (sprDist / 4.0));
-                        sprLight += vec3(0.05, 0.05, 0.08) * sprPersonal;
+                        sprLight += u_ambient_near_color * sprPersonal;
 
                         if (u_flashlight_active > 0.5) {
                             float dotProd = dot(rayDir, flashDir);
@@ -412,58 +560,62 @@ init 10 python:
                             float lDist = distance(spritePos, lData.xy);
                             
                             if (lDist < lData.z) {
-                                float visibility = 0.0;
-                                int samples = 1;
-                                float spread = 0.0;
+                                float visibility = 1.0;
                                 
-                                if (u_soft_shadows > 0.5) {
-                                    samples = 9;
-                                    spread = 0.55;
-                                }
-                                
-                                vec2 dirToLight = normalize(lData.xy - spritePos);
-                                vec2 perp = vec2(-dirToLight.y, dirToLight.x) * spread;
-                                
-                                for (int k = 0; k < 9; k++) {
-                                    if (k >= samples) break;
+                                if (u_enable_shadows > 0.5) {
+                                    visibility = 0.0;
+                                    int samples = 1;
+                                    float spread = 0.0;
                                     
-                                    float offScale = 0.0;
-                                    if (k == 1) offScale = 1.0;
-                                    if (k == 2) offScale = -1.0;
-                                    if (k == 3) offScale = 0.5;
-                                    if (k == 4) offScale = -0.5;
-                                    if (k == 5) offScale = 0.75;
-                                    if (k == 6) offScale = -0.75;
-                                    if (k == 7) offScale = 0.25;
-                                    if (k == 8) offScale = -0.25;
-                                    
-                                    vec2 offset = perp * offScale;
-                                    
-                                    vec2 targetPos = lData.xy + offset;
-                                    vec2 rayDir = normalize(targetPos - spritePos);
-                                    float rayDist = distance(targetPos, spritePos);
-                                    
-                                    float stepSize = 0.2;
-                                    int steps = int(rayDist / stepSize);
-                                    vec2 checkPos = spritePos + rayDir * 0.1;
-                                    bool hitWall = false;
-                                    
-                                    for(int s=0; s<64; s++) {
-                                        if (s >= steps) break;
-                                        checkPos += rayDir * stepSize;
-                                        
-                                        vec2 mapUV = (floor(checkPos) + 0.5) / u_map_size;
-                                        mapUV *= u_map_uv_scale;
-                                        if (texture2D(u_map_texture, mapUV).r > 0.5) {
-                                            hitWall = true;
-                                            break;
-                                        }
+                                    if (u_soft_shadows > 0.5) {
+                                        samples = 9;
+                                        spread = 0.55;
                                     }
                                     
-                                    if (!hitWall) visibility += 1.0;
+                                    vec2 dirToLight = normalize(lData.xy - spritePos);
+                                    vec2 perp = vec2(-dirToLight.y, dirToLight.x) * spread;
+                                    
+                                    for (int k = 0; k < 9; k++) {
+                                        if (k >= samples) break;
+                                        
+                                        float offScale = 0.0;
+                                        if (k == 1) offScale = 1.0;
+                                        if (k == 2) offScale = -1.0;
+                                        if (k == 3) offScale = 0.5;
+                                        if (k == 4) offScale = -0.5;
+                                        if (k == 5) offScale = 0.75;
+                                        if (k == 6) offScale = -0.75;
+                                        if (k == 7) offScale = 0.25;
+                                        if (k == 8) offScale = -0.25;
+                                        
+                                        vec2 offset = perp * offScale;
+                                        
+                                        vec2 targetPos = lData.xy + offset;
+                                        vec2 rayDir = normalize(targetPos - spritePos);
+                                        float rayDist = distance(targetPos, spritePos);
+                                        
+                                        float stepSize = 0.2;
+                                        int steps = int(rayDist / stepSize);
+                                        vec2 checkPos = spritePos + rayDir * 0.1;
+                                        bool hitWall = false;
+                                        
+                                        for(int s=0; s<64; s++) {
+                                            if (s >= steps) break;
+                                            checkPos += rayDir * stepSize;
+                                            
+                                            vec2 mapUV = (floor(checkPos) + 0.5) / u_map_size;
+                                            mapUV *= u_map_uv_scale;
+                                            if (texture2D(u_map_texture, mapUV).r > 0.5) {
+                                                hitWall = true;
+                                                break;
+                                            }
+                                        }
+                                        
+                                        if (!hitWall) visibility += 1.0;
+                                    }
+                                    
+                                    visibility /= float(samples);
                                 }
-                                
-                                visibility /= float(samples);
 
                                 if (visibility > 0.0) {
                                     float att = 1.0 - (lDist / lData.z);
@@ -516,6 +668,7 @@ init 10 python:
         uniform float u_flash_angle;
         uniform vec3 u_flash_color;
         uniform float u_heat_distortion;
+        uniform float u_enable_smoke;
     """, vertex_200="""
         v_tex_coord = a_tex_coord;
     """, fragment_200="""
@@ -548,7 +701,7 @@ init 10 python:
         // BARREL SMOKE
         // Simulates smoke emanating from the hot barrel and rising up
         float smoke_alpha = 0.0;
-        if (u_flash_progress > 0.02) {
+        if (u_enable_smoke > 0.5 && u_flash_progress > 0.02) {
             float smoke_p = (u_flash_progress - 0.02) / 0.98;
             
             // Use unrotated UV so smoke always rises UP relative to screen
@@ -1081,7 +1234,7 @@ init 10 python:
             self.aim_state = 'hip'
             self.anim_state = 'idle' # 'idle', 'playing'
             
-            self.flash_base = Transform(Image("pics/items/sight.png"), size=(512, 512))
+            self.flash_base = Transform(Image("pics/items/sight.webp"), size=(512, 512))
 
         def play(self):
             if self.anim_state != 'playing':
@@ -1301,6 +1454,7 @@ init 10 python:
                             u_flash_color=self.flash_config['color'],
                             u_flash_angle=self.current_flash_rot,
                             u_heat_distortion=1.0 if getattr(persistent, "stein_heat_distortion", True) else 0.0,
+                            u_enable_smoke=1.0 if getattr(persistent, "stein_lighting_quality", 0) == 0 else 0.0,
                             zoom=self.flash_config['size'],
                             additive=1.0
                         )
@@ -1315,7 +1469,7 @@ init 10 python:
             super(RaycastLayer, self).__init__(**kwargs)
             self.c = controller
             # We use an Image instead of Solid to ensure a_tex_coord attributes are generated for the shader
-            self.base_displayable = Transform(Image("pics/background.png"), size=(self.c.internal_width, self.c.internal_height))
+            self.base_displayable = Transform(Image("pics/background.webp"), size=(self.c.internal_width, self.c.internal_height))
 
         def render(self, width, height, st, at):
             c = self.c
@@ -1445,6 +1599,8 @@ init 10 python:
             child_render.add_uniform('u_z_offset', c.player.z)
             child_render.add_uniform('u_vertical_scale', vertical_scale)
             child_render.add_uniform('u_sky_texture', c.sky_texture)
+            child_render.add_uniform('u_volumetric_clouds', 1.0 if persistent.stein_volumetric_clouds else 0.0)
+            child_render.add_uniform('u_time_of_day', float(c.lighting_preset.get('time_id', 0.0)))
 
             child_render.add_uniform('u_map_size', (float(c.map_w), float(c.map_h)))
             child_render.add_uniform('u_map_uv_scale', c.map_uv_scale)
@@ -1464,17 +1620,38 @@ init 10 python:
             
             child_render.add_uniform('u_flashlight_bob', (fl_bob_x, fl_bob_y))
             
-            soft_shadows = 1.0 if getattr(persistent, "stein_soft_shadows", True) else 0.0
+            lighting_quality = getattr(persistent, "stein_lighting_quality", 0) # 0=High, 1=Low
+
+            if lighting_quality == 1: # Low
+                soft_shadows = 0.0
+                enable_shadows = 0.0
+                max_active_lights = 4
+                max_dist = 30.0
+                simple_floor = 1.0
+            else: # High
+                soft_shadows = 1.0 if getattr(persistent, "stein_soft_shadows", True) else 0.0
+                enable_shadows = 1.0 if getattr(persistent, "stein_enable_shadows", True) else 0.0
+                max_active_lights = 16
+                max_dist = 60.0
+                simple_floor = 0.0
+
             child_render.add_uniform('u_soft_shadows', soft_shadows)
+            child_render.add_uniform('u_enable_shadows', enable_shadows)
+            child_render.add_uniform('u_max_dist', max_dist)
+            child_render.add_uniform('u_simple_floor', simple_floor)
             
+            # Lighting Uniforms
+            child_render.add_uniform('u_ambient_color', c.lighting_preset['ambient_base'])
+            child_render.add_uniform('u_ambient_near_color', c.lighting_preset['ambient_near'])
+
             child_render.add_uniform('u_light_positions', final_lights_data)
-            child_render.add_uniform('u_num_active_lights', float(min(len(potential_lights), MAX_LIGHTS)))
+            child_render.add_uniform('u_num_active_lights', float(min(len(potential_lights), max_active_lights)))
 
             renpy.redraw(self, 0.01)
             return child_render
 
     class GPURenpystein(renpy.Displayable):
-        def __init__(self, width, height, worldMap, exits=[], internal_width=None, internal_height=None, **kwargs):
+        def __init__(self, width, height, worldMap, exits=[], internal_width=None, internal_height=None, lighting_preset=None, **kwargs):
             super(GPURenpystein, self).__init__(**kwargs)
             self.width = width
             self.height = height
@@ -1485,6 +1662,13 @@ init 10 python:
             self.map_w = self.mapWidth
             self.map_h = self.mapHeight
             
+            self.lighting_preset = lighting_preset if lighting_preset else {
+                'ambient_base': (0.02, 0.02, 0.05),
+                'ambient_near': (0.05, 0.05, 0.08),
+                'sky_texture': "pics/background.webp",
+                'time_id': 0.0
+            }
+
             self.fps_frame_count = 0
             self.fps_timer_accum = 0.0
 
@@ -1508,8 +1692,15 @@ init 10 python:
             self.sprite_atlas, self.num_sprite_textures = self.create_sprite_atlas()
             self.solid_base = renpy.display.imagelike.Solid("#000", xsize=width, ysize=height)
             
-            with renpy.open_file("pics/background.png") as f:
-                bg_surf = pygame.image.load(f).convert_alpha()
+            sky_path = self.lighting_preset.get('sky_texture', "pics/background.webp")
+            try:
+                with renpy.open_file(sky_path) as f:
+                    bg_surf = pygame.image.load(f).convert_alpha()
+            except:
+                # Fallback
+                with renpy.open_file("pics/background.webp") as f:
+                    bg_surf = pygame.image.load(f).convert_alpha()
+            
             bg_surf = pygame.transform.scale(bg_surf, (width, height))
             self.sky_texture = renpy.display.draw.load_texture(bg_surf)
 
@@ -1648,10 +1839,10 @@ init 10 python:
             self.update_current_weapon_ref()
             
             self.bullet_texture_index = 6
-            self.sight_d = Image("pics/items/sight.png")
-            with renpy.open_file("pics/gui/damage_x.png") as f:
+            self.sight_d = Image("pics/items/sight.webp")
+            with renpy.open_file("pics/gui/damage_x.webp") as f:
                 self.hit_marker_img = pygame.image.load(f).convert_alpha()
-            with renpy.open_file("pics/gui/arrow_d.png") as f:
+            with renpy.open_file("pics/gui/arrow_d.webp") as f:
                 arrow_surf = pygame.image.load(f).convert_alpha()
             self.arrow_img = pygame.transform.scale(arrow_surf, (30, 30))
 
@@ -1787,11 +1978,11 @@ init 10 python:
 
         def create_wall_atlas(self):
             image_paths = [  
-                "pics/walls/eagle.png", "pics/walls/redbrick.png",
-                "pics/walls/purplestone.png", "pics/walls/greystone.png",
-                "pics/walls/bluestone.png", "pics/walls/mossy.png",
-                "pics/walls/wood.png", "pics/walls/colorstone.png",
-                "pics/walls/cement.png",
+                "pics/walls/eagle.webp", "pics/walls/redbrick.webp",
+                "pics/walls/purplestone.webp", "pics/walls/greystone.webp",
+                "pics/walls/bluestone.webp", "pics/walls/mossy.webp",
+                "pics/walls/wood.webp", "pics/walls/colorstone.webp",
+                "pics/walls/cement.webp",
             ]
             
             surfaces = []
@@ -1825,7 +2016,7 @@ init 10 python:
 
         def load_floor_texture(self):
             try:
-                with renpy.open_file("pics/walls/cement.png") as f:
+                with renpy.open_file("pics/walls/cement.webp") as f:
                     surf = pygame.image.load(f).convert_alpha()
                     surf = pygame.transform.scale(surf, (64, 64))
                     return renpy.display.draw.load_texture(surf)
@@ -1836,20 +2027,20 @@ init 10 python:
 
         def create_sprite_atlas(self):
             sprite_paths = [  
-                "pics/items/barrel.png", "pics/items/pillar.png",
-                "pics/items/greenlight.png", "pics/items/pillar_destroyed.png",
-                "pics/enemies/guard.png",
-                "pics/enemies/guard_d.png",
-                "pics/items/bullet.png",
-                "pics/items/medkit.png",
-                "pics/items/cookie.png",
-                "pics/enemies/yuritler.png",
-                "pics/enemies/yuritler_d.png",
-                "pics/items/coins.png",
-                "pics/items/coins.png", 
-                "pics/items/random_gun_i.png",
-                "pics/items/bullet_red.png",
-                "pics/items/minigun.png",
+                "pics/items/barrel.webp", "pics/items/pillar.webp",
+                "pics/items/greenlight.webp", "pics/items/pillar_destroyed.webp",
+                "pics/enemies/guard.webp",
+                "pics/enemies/guard_d.webp",
+                "pics/items/bullet.webp",
+                "pics/items/medkit.webp",
+                "pics/items/cookie.webp",
+                "pics/enemies/yuritler.webp",
+                "pics/enemies/yuritler_d.webp",
+                "pics/items/coins.webp",
+                "pics/items/coins.webp", 
+                "pics/items/random_gun_i.webp",
+                "pics/items/bullet_red.webp",
+                "pics/items/minigun.webp",
             ]
             
             surfaces = []
@@ -1906,14 +2097,12 @@ init 10 python:
             dtime = st - self.oldst
             self.oldst = st
 
-            self.fps_frame_count += 1
-            self.fps_timer_accum += dtime
-            
-            if self.fps_timer_accum >= 0.5:
-                current_fps = int(self.fps_frame_count / self.fps_timer_accum)
-                renpy.store.stein_current_fps = current_fps
-                self.fps_frame_count = 0
-                self.fps_timer_accum = 0.0
+            if dtime > 0.0:
+                inst_fps = 1.0 / dtime
+                
+                current_fps = getattr(renpy.store, 'stein_current_fps', 60)
+                new_fps = (current_fps * 0.9) + (inst_fps * 0.1)
+                renpy.store.stein_current_fps = int(new_fps)
 
             if simulate_touch: self.update_player_from_touch_state()
             else: self.touch_speed = 0.0; self.touch_strafe = 0.0; self.touch_dir = 0.0
@@ -2057,18 +2246,7 @@ init 10 python:
             # hud_r = renpy.render(hud_text, width, height, st, at)
             # r.blit(hud_r, (30, height - 60))
 
-            if self.is_arena_mode:
-                arena_text = Text(_("ROUND: {}  |  KILLS: {}  |  COINS: {}").format(self.current_round, persistent.stein_kills, renpy.store.stein_session_coins), size=28, color="#FFD700", outlines=[(2, "#000", 0, 0)])
-                arena_r = renpy.render(arena_text, width, height, st, at)
-                aw, ah = arena_r.get_size()
-                r.blit(arena_r, (width - aw - 30, height - 60))
-                
-                # Next Round Timer
-                if self.inter_round_timer > 0 and self.current_round > 0:
-                    timer_text = Text(_("NEXT ROUND IN: {:.1f}").format(self.inter_round_timer), size=48, color="#F00", outlines=[(2, "#000", 0, 0)])
-                    timer_r = renpy.render(timer_text, width, height, st, at)
-                    tw, th = timer_r.get_size()
-                    r.blit(timer_r, (width/2 - tw/2, 100))
+
 
             # Damage indicators
             center_x = width / 2; center_y = height / 2; indicator_radius = 200
@@ -2113,6 +2291,19 @@ init 10 python:
             is_firing = self.mouse_firing or self.gp_firing
             current_weapon_obj = self.weapons[self.player.current_weapon_name]
             current_weapon_obj.render_to(r, width, height, st, at, is_ads=self.is_aiming or self.gp_aiming, is_firing=is_firing, movement_state=movement_state)
+
+            if self.is_arena_mode:
+                arena_text = Text(_("ROUND: {}  |  KILLS: {}  |  COINS: {}").format(self.current_round, persistent.stein_kills, renpy.store.stein_session_coins), size=28, color="#FFD700", outlines=[(2, "#000", 0, 0)])
+                arena_r = renpy.render(arena_text, width, height, st, at)
+                aw, ah = arena_r.get_size()
+                r.blit(arena_r, (width - aw - 30, height - 60))
+                
+                # Next Round Timer
+                if self.inter_round_timer > 0 and self.current_round > 0:
+                    timer_text = Text(_("NEXT ROUND IN: {:.1f}").format(self.inter_round_timer), size=48, color="#F00", outlines=[(2, "#000", 0, 0)])
+                    timer_r = renpy.render(timer_text, width, height, st, at)
+                    tw, th = timer_r.get_size()
+                    r.blit(timer_r, (width/2 - tw/2, 100))
             
             if self.return_value:
                 renpy.timeout(0)
@@ -2446,7 +2637,10 @@ init 10 python:
 
                     btn_flashlight_held = False
 
-                    if joy.get_numhats() > 0:
+                    if renpy.android:
+                        if joy.get_numbuttons() > 11 and joy.get_button(11):
+                            btn_flashlight_held = True
+                    elif joy.get_numhats() > 0:
                         hat_x, hat_y = joy.get_hat(0)
                         if hat_y == 1: 
                             btn_flashlight_held = True
