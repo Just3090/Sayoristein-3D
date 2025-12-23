@@ -78,7 +78,7 @@ screen sayoristein_menu():
 
         textbutton _("Play") action ShowMenu("sayoristein_level_select") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
         textbutton _("Settings") action ShowMenu("sayoristein_settings_menu") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
-        textbutton _("Exit") action Return() style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
+        textbutton _("Exit") action Quit() style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
 
 screen sayoristein_settings_menu():
     tag menu
