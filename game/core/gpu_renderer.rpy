@@ -2608,7 +2608,10 @@ init 10 python:
                     if "accelerometer" in name or "gyro" in name: continue
                     
                     if joy.get_numaxes() > 4 and joy.get_axis(4) > TRIGGER_THRESHOLD: self.gp_aiming = True
-                    if joy.get_numbuttons() > 4 and joy.get_button(4): self.gp_running = True
+                    if renpy.android:
+                        if joy.get_numbuttons() > 9 and joy.get_button(9): self.gp_running = True
+                    else:
+                        if joy.get_numbuttons() > 4 and joy.get_button(4): self.gp_running = True
 
                     if joy.get_numaxes() > 0:
                         x = joy.get_axis(0)
