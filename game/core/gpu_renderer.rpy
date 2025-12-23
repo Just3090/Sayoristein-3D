@@ -47,6 +47,9 @@ init 10 python:
 
     renpy.register_shader("stein.raycaster", variables="""
         uniform float u_volumetric_clouds;
+        uniform float u_rain_intensity;
+        uniform float u_snow_intensity;
+        uniform float u_wetness;
         uniform float u_time_of_day;
         uniform float u_time;
         uniform vec2 u_resolution;
@@ -109,6 +112,13 @@ init 10 python:
                 a *= 0.5;
             }
             return v;
+        }
+
+        float rain_layer(vec2 uv, float t) {
+            vec2 p = uv;
+            p.y += t;
+            float n = noise(p);
+            return smoothstep(0.85, 1.0, n);
         }
     """, fragment_300="""
         const int MAX_STEPS = 128; 
@@ -223,6 +233,15 @@ init 10 python:
                     vec2 floorUV = vec2(fract(hitPos.x), fract(hitPos.y));
                     color = texture2D(u_floor_texture, floorUV, -1.0).rgb;
                     color *= 0.6;
+                }
+
+                if (u_wetness > 0.0) {
+                    color *= (1.0 - u_wetness * 0.4);
+                }
+
+                if (u_rain_intensity > 0.0) {
+                    float splash = step(0.98, hash(hitPos.xy * 10.0 + u_time * 5.0));
+                    color += vec3(splash * 0.3 * u_rain_intensity);
                 }
             } else {
                 vec2 texUV;
@@ -667,6 +686,67 @@ init 10 python:
                     }
                 }
             }
+        }
+
+        if (u_rain_intensity > 0.0) {
+            float rainVal = 0.0;
+            for (int i=1; i<=4; i++) {
+                float dist = float(i) * 2.5; 
+                if (dist > currentDepth) break;
+                
+                vec3 p = rayPos + rayDir * dist;
+                
+                vec2 uv1 = vec2(p.y, p.z) * vec2(1.0, 2.0); // YZ Plane
+                vec2 uv2 = vec2(p.x, p.z) * vec2(1.0, 2.0); // XZ Plane
+                
+                float t = u_time * 15.0;
+                float n1 = rain_layer(uv1, t);
+                float n2 = rain_layer(uv2, t);
+                
+                float blend = abs(rayDir.x);
+                float n = mix(n2, n1, blend);
+                
+                // Distance Fade
+                float fade = 1.0 - (dist / 12.0);
+                if (fade < 0.0) fade = 0.0;
+                
+                rainVal += n * fade;
+            }
+            color = mix(color, vec3(0.7, 0.8, 0.9), rainVal * u_rain_intensity * 0.4);
+        }
+
+        if (u_snow_intensity > 0.0) {
+            float snowVal = 0.0;
+            for (int i=1; i<=4; i++) {
+                float dist = float(i) * 2.0; 
+                if (dist > currentDepth) break;
+                
+                vec3 p = rayPos + rayDir * dist;
+                
+                vec2 uv1 = vec2(p.y, p.z) * 0.8; 
+                vec2 uv2 = vec2(p.x, p.z) * 0.8;
+                
+                float t = u_time * 2.0;
+                uv1.y += t;
+                uv2.y += t;
+                
+                uv1.x += sin(u_time + p.z) * 0.2;
+                uv2.x += cos(u_time + p.z) * 0.2;
+                
+                float n1 = noise(uv1);
+                float n2 = noise(uv2);
+                
+                float blend = abs(rayDir.x);
+                float n = mix(n2, n1, blend);
+                
+                float s = smoothstep(0.95, 1.0, n);
+                
+                float fade = 1.0 - (dist / 10.0);
+                if (fade < 0.0) fade = 0.0;
+                
+                snowVal += s * fade;
+            }
+            color = mix(color, vec3(1.0), snowVal * u_snow_intensity * 0.8);
         }
 
         gl_FragColor = vec4(color, 1.0);
@@ -1637,6 +1717,16 @@ init 10 python:
             child_render.add_uniform('u_sky_texture', c.sky_texture)
             child_render.add_uniform('u_volumetric_clouds', 1.0 if persistent.stein_volumetric_clouds else 0.0)
             
+            rain_int = 0.0
+            snow_int = 0.0
+            if hasattr(c, 'weather_state'):
+                if c.weather_state == "rain": rain_int = 1.0
+                elif c.weather_state == "snow": snow_int = 1.0
+            
+            child_render.add_uniform('u_rain_intensity', rain_int)
+            child_render.add_uniform('u_snow_intensity', snow_int)
+            child_render.add_uniform('u_wetness', getattr(c, 'wetness', 0.0))
+            
             current_hour = 0.0
             if c.is_arena_mode:
                 elapsed_hours = st * 0.04
@@ -1645,6 +1735,48 @@ init 10 python:
                 current_hour = float(c.lighting_preset.get('time_id', 0.0))
             
             child_render.add_uniform('u_time_of_day', current_hour)
+
+            ambient_base = c.lighting_preset['ambient_base']
+            ambient_near = c.lighting_preset['ambient_near']
+
+            if c.is_arena_mode:
+                # Define colors
+                night_base = (0.1, 0.1, 0.15)
+                night_near = (0.15, 0.15, 0.2)
+                
+                day_base = (0.8, 0.8, 0.8)
+                day_near = (0.9, 0.9, 0.9)
+                
+                sunset_base = (0.6, 0.4, 0.3)
+                sunset_near = (0.7, 0.5, 0.4)
+                
+                t = current_hour
+                
+                def mix_col(c1, c2, p):
+                    return (
+                        c1[0] * (1.0 - p) + c2[0] * p,
+                        c1[1] * (1.0 - p) + c2[1] * p,
+                        c1[2] * (1.0 - p) + c2[2] * p
+                    )
+
+                if t < 5.0:
+                    ambient_base = night_base; ambient_near = night_near
+                elif t < 8.0:
+                    p = (t - 5.0) / 3.0
+                    ambient_base = mix_col(night_base, day_base, p)
+                    ambient_near = mix_col(night_near, day_near, p)
+                elif t < 16.0:
+                    ambient_base = day_base; ambient_near = day_near
+                elif t < 19.0:
+                    p = (t - 16.0) / 3.0
+                    ambient_base = mix_col(day_base, sunset_base, p)
+                    ambient_near = mix_col(day_near, sunset_near, p)
+                elif t < 21.0:
+                    p = (t - 19.0) / 2.0
+                    ambient_base = mix_col(sunset_base, night_base, p)
+                    ambient_near = mix_col(sunset_near, night_near, p)
+                else:
+                    ambient_base = night_base; ambient_near = night_near
 
             child_render.add_uniform('u_map_size', (float(c.map_w), float(c.map_h)))
             child_render.add_uniform('u_map_uv_scale', c.map_uv_scale)
@@ -1685,8 +1817,8 @@ init 10 python:
             child_render.add_uniform('u_simple_floor', simple_floor)
             
             # Lighting Uniforms
-            child_render.add_uniform('u_ambient_color', c.lighting_preset['ambient_base'])
-            child_render.add_uniform('u_ambient_near_color', c.lighting_preset['ambient_near'])
+            child_render.add_uniform('u_ambient_color', ambient_base)
+            child_render.add_uniform('u_ambient_near_color', ambient_near)
 
             child_render.add_uniform('u_light_positions', final_lights_data)
             child_render.add_uniform('u_num_active_lights', float(min(len(potential_lights), max_active_lights)))
@@ -1724,6 +1856,11 @@ init 10 python:
                     self.arena_start_hour = 18.0 # Sunset
                 else:
                     self.arena_start_hour = 2.0 # Night
+
+            self.weather_state = "none"
+            self.weather_timer = 0.0
+            self.next_weather_check = 5.0
+            self.wetness = 0.0
 
             self.fps_frame_count = 0
             self.fps_timer_accum = 0.0
@@ -2366,7 +2503,52 @@ init 10 python:
             renpy.redraw(self, 0.01) 
             return r
 
+        def update_weather(self, dt):
+            if not hasattr(self, 'weather_state'):
+                self.weather_state = "none"
+                self.weather_timer = 0.0
+                self.next_weather_check = 5.0
+                self.wetness = 0.0
+
+            if not self.is_arena_mode: return
+            
+            if not persistent.stein_volumetric_clouds or not getattr(persistent, "stein_enable_weather", True):
+                self.weather_state = "none"
+                self.wetness = max(0.0, self.wetness - dt * 0.1)
+                return
+
+            game_hours_passed = dt * 0.04
+            
+            if self.weather_state != "none":
+                self.weather_timer -= game_hours_passed
+                self.wetness = min(1.0, self.wetness + dt * 0.2)
+                
+                if self.weather_timer <= 0:
+                    self.weather_state = "none"
+            else:
+                self.wetness = max(0.0, self.wetness - dt * 0.05)
+            
+            self.next_weather_check -= game_hours_passed
+            if self.next_weather_check <= 0:
+                if config.developer:
+                    self.next_weather_check = 1.0
+                else:
+                    self.next_weather_check = 5.0 
+                
+                if self.weather_state == "none":
+                    prob = 0.10
+                    if config.developer: prob = 1.0
+                    
+                    if renpy.random.random() < prob:
+                        if renpy.random.random() < 0.5:
+                            self.weather_state = "rain"
+                        else:
+                            self.weather_state = "snow"
+                        
+                        self.weather_timer = 6.0
+
         def update_logic(self, dt):
+            self.update_weather(dt)
             self.hit_marker_timer = max(0, self.hit_marker_timer - dt)
             self.check_item_pickup()
             for enemy in self.enemies: enemy.update(dt, self.player)

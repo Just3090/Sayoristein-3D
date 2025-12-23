@@ -14,11 +14,11 @@ screen stein_controls_overlay():
 
         # Button to switch to Keyboard mode.
         if not renpy.android:
-            textbutton _("Keyboard & Gamepad") action SetVariable("simulate_touch", False)
+            text _("Keyboard & Gamepad")
         
         # Button to switch to Touch/Mouse mode.
         if renpy.android:
-            textbutton _("Touch & Gamepad") action SetVariable("simulate_touch", True)
+            text _("Touch & Gamepad")
 
     if persistent.stein_show_fps:
         add DynamicDisplayable(stein_fps_displayable):
@@ -185,6 +185,18 @@ screen sayoristein_settings_menu():
                             action ToggleVariable("persistent.stein_volumetric_clouds")
                             style "sayoristein_menu_button"
                             text_style "sayoristein_menu_button_text"
+
+                        if persistent.stein_volumetric_clouds:
+                            textbutton ("Weather Effects: " + ("ON" if persistent.stein_enable_weather else "OFF")):
+                                action ToggleVariable("persistent.stein_enable_weather")
+                                style "sayoristein_menu_button"
+                                text_style "sayoristein_menu_button_text"
+                        else:
+                            textbutton _("Weather Effects: LOCKED"):
+                                action None
+                                style "sayoristein_menu_button"
+                                text_style "sayoristein_menu_button_text"
+                                text_color "#888888"
 
                         if persistent.stein_lighting_quality == 0:
                             textbutton ("Shadows: " + ("ON" if persistent.stein_enable_shadows else "OFF")):
@@ -364,6 +376,9 @@ init python:
 
     if getattr(persistent, "stein_volumetric_clouds", None) is None:
         persistent.stein_volumetric_clouds = False
+
+    if getattr(persistent, "stein_enable_weather", None) is None:
+        persistent.stein_enable_weather = True
 
     if getattr(persistent, "stein_motion_blur_strength", None) is None:
         persistent.stein_motion_blur_strength = 0.3
