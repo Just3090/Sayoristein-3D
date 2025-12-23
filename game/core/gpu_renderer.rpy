@@ -385,18 +385,43 @@ init 10 python:
                 vec3 skyColorBottom;
                 vec3 cloudColor;
                 
-                if (u_time_of_day < 0.5) { // Night
-                    skyColorTop = vec3(0.0, 0.0, 0.1);
-                    skyColorBottom = vec3(0.05, 0.05, 0.2);
-                    cloudColor = vec3(0.1, 0.1, 0.15);
-                } else if (u_time_of_day < 1.5) { // Day
-                    skyColorTop = vec3(0.0, 0.4, 0.8);
-                    skyColorBottom = vec3(0.6, 0.8, 1.0);
-                    cloudColor = vec3(1.0, 1.0, 1.0);
-                } else { // Afternoon
-                    skyColorTop = vec3(0.2, 0.1, 0.4);
-                    skyColorBottom = vec3(1.0, 0.4, 0.2);
-                    cloudColor = vec3(1.0, 0.6, 0.5);
+                // Day Cycle Colors
+                vec3 nightTop = vec3(0.0, 0.0, 0.1);
+                vec3 nightBot = vec3(0.05, 0.05, 0.2);
+                vec3 nightCloud = vec3(0.1, 0.1, 0.15);
+
+                vec3 dayTop = vec3(0.0, 0.4, 0.8);
+                vec3 dayBot = vec3(0.6, 0.8, 1.0);
+                vec3 dayCloud = vec3(1.0, 1.0, 1.0);
+
+                vec3 sunsetTop = vec3(0.2, 0.1, 0.4);
+                vec3 sunsetBot = vec3(1.0, 0.4, 0.2);
+                vec3 sunsetCloud = vec3(1.0, 0.6, 0.5);
+
+                float t = mod(u_time_of_day, 24.0); // Ensure 0-24 range
+
+                
+                if (t < 5.0) {
+                    skyColorTop = nightTop; skyColorBottom = nightBot; cloudColor = nightCloud;
+                } else if (t < 8.0) {
+                    float p = (t - 5.0) / 3.0;
+                    skyColorTop = mix(nightTop, dayTop, p);
+                    skyColorBottom = mix(nightBot, dayBot, p);
+                    cloudColor = mix(nightCloud, dayCloud, p);
+                } else if (t < 16.0) {
+                    skyColorTop = dayTop; skyColorBottom = dayBot; cloudColor = dayCloud;
+                } else if (t < 19.0) {
+                    float p = (t - 16.0) / 3.0;
+                    skyColorTop = mix(dayTop, sunsetTop, p);
+                    skyColorBottom = mix(dayBot, sunsetBot, p);
+                    cloudColor = mix(dayCloud, sunsetCloud, p);
+                } else if (t < 21.0) {
+                    float p = (t - 19.0) / 2.0;
+                    skyColorTop = mix(sunsetTop, nightTop, p);
+                    skyColorBottom = mix(sunsetBot, nightBot, p);
+                    cloudColor = mix(sunsetCloud, nightCloud, p);
+                } else {
+                    skyColorTop = nightTop; skyColorBottom = nightBot; cloudColor = nightCloud;
                 }
 
                 float skyGradient = smoothstep(-0.5, 0.5, rayDir.z);
@@ -412,10 +437,21 @@ init 10 python:
                     float c = smoothstep(0.4, 0.8, n);
                     c *= smoothstep(0.0, 0.2, rayDir.z);
                     
-                    color = mix(color, cloudColor, c);
+                    float brightness = 1.0;
+                    if (t < 6.0 || t > 20.0) brightness = 0.3;
+                    else if (t < 8.0) brightness = mix(0.3, 1.0, (t - 6.0) / 2.0);
+                    else if (t > 18.0) brightness = mix(1.0, 0.3, (t - 18.0) / 2.0);
+                    
+                    color = mix(color, cloudColor * brightness, c);
                 }
                 
-                if (u_time_of_day < 0.5 && rayDir.z > 0.01) {
+                float starVisibility = 0.0;
+                if (t < 6.0) starVisibility = 1.0;
+                else if (t < 7.0) starVisibility = 1.0 - (t - 6.0);
+                else if (t > 20.0) starVisibility = (t - 20.0) / 1.0;
+                if (t > 21.0) starVisibility = 1.0;
+
+                if (starVisibility > 0.01 && rayDir.z > 0.01) {
                     vec2 starUV = rayDir.xy / (1.0 + rayDir.z);
                     
                     float scale = 300.0; 
@@ -440,7 +476,7 @@ init 10 python:
                         // Horizon fade
                         float fade = smoothstep(0.01, 0.1, rayDir.z);
                         
-                        color += vec3(brightness * twinkle * fade);
+                        color += vec3(brightness * twinkle * fade * starVisibility);
                     }
                 }
             } else {
@@ -1600,7 +1636,15 @@ init 10 python:
             child_render.add_uniform('u_vertical_scale', vertical_scale)
             child_render.add_uniform('u_sky_texture', c.sky_texture)
             child_render.add_uniform('u_volumetric_clouds', 1.0 if persistent.stein_volumetric_clouds else 0.0)
-            child_render.add_uniform('u_time_of_day', float(c.lighting_preset.get('time_id', 0.0)))
+            
+            current_hour = 0.0
+            if c.is_arena_mode:
+                elapsed_hours = st * 0.04
+                current_hour = (c.arena_start_hour + elapsed_hours) % 24.0
+            else:
+                current_hour = float(c.lighting_preset.get('time_id', 0.0))
+            
+            child_render.add_uniform('u_time_of_day', current_hour)
 
             child_render.add_uniform('u_map_size', (float(c.map_w), float(c.map_h)))
             child_render.add_uniform('u_map_uv_scale', c.map_uv_scale)
@@ -1669,12 +1713,23 @@ init 10 python:
                 'time_id': 0.0
             }
 
+            self.is_arena_mode = getattr(renpy.store, 'is_arena_mode', False)
+
+            self.arena_start_hour = 12.0
+            if self.is_arena_mode:
+                roll = renpy.random.random()
+                if roll < 0.33:
+                    self.arena_start_hour = 12.0 # Day
+                elif roll < 0.66:
+                    self.arena_start_hour = 18.0 # Sunset
+                else:
+                    self.arena_start_hour = 2.0 # Night
+
             self.fps_frame_count = 0
             self.fps_timer_accum = 0.0
 
             self.exits = exits
             
-            self.is_arena_mode = getattr(renpy.store, 'is_arena_mode', False)
             self.internal_width = internal_width if internal_width is not None else width
             self.internal_height = internal_height if internal_height is not None else height
             self.damage_flash_timer = 0.0
