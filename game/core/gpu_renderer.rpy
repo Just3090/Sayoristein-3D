@@ -129,23 +129,24 @@ init 10 python:
         // Player Position (Camera Origin). Z=0.5 is eye level + offsets
         vec3 rayPos = vec3(u_player_pos.x, u_player_pos.y, 0.5 + u_z_offset);
         
+        // Pitch Angle
+        float pitchAngle = atan(u_pitch);
+        float cp = cos(pitchAngle);
+        float sp = sin(pitchAngle);
+        vec3 rightAxis = normalize(vec3(u_player_plane, 0.0));
+
         // Ray Direction
         float cameraX = 2.0 * stein_uv.x - 1.0; 
-        vec2 rayDirXY = u_player_dir + u_player_plane * cameraX;
-        
-        // Map screen Y (0..1) to vertical view angle (slope)
-        // Center (0.5) is straight ahead (slope 0)
-        // 0.5 - stein_uv.y gives range [0.5, -0.5]
-        // Scale by vertical FOV (u_vertical_scale) and add pitch (look up/down)
         float screenY = (0.5 - stein_uv.y) * 2.0; 
-        float rayDirZ = (screenY / u_vertical_scale) + u_pitch;
         
-        vec3 rayDir = normalize(vec3(rayDirXY, rayDirZ));
+        vec3 baseDir = vec3(u_player_dir, 0.0) + vec3(u_player_plane, 0.0) * cameraX + vec3(0.0, 0.0, 1.0) * (screenY / u_vertical_scale);
+        
+        vec3 rayDir = baseDir * cp + cross(rightAxis, baseDir) * sp + rightAxis * dot(rightAxis, baseDir) * (1.0 - cp);
+        rayDir = normalize(rayDir);
 
-        vec2 flashDirXY = u_player_dir + (u_player_plane * u_flashlight_bob.x);
-        float flashDirZ = u_pitch + u_flashlight_bob.y;
-        
-        vec3 flashDir = normalize(vec3(flashDirXY, flashDirZ));
+        vec3 flashBase = vec3(u_player_dir, 0.0) + vec3(u_player_plane, 0.0) * u_flashlight_bob.x + vec3(0.0, 0.0, 1.0) * u_flashlight_bob.y;
+        vec3 flashDir = flashBase * cp + cross(rightAxis, flashBase) * sp + rightAxis * dot(rightAxis, flashBase) * (1.0 - cp);
+        flashDir = normalize(flashDir);
         
         // DDA SETUP
         ivec3 mapPos = ivec3(floor(rayPos));
@@ -510,9 +511,12 @@ init 10 python:
 
         // SPRITE RENDERING (Adapted for 3D)
         // We approximate 2D billboard logic using the 3D ray distance
-        // Project rayDist onto the XY plane
-        // Using length() is safer, technically less accurate for planar depth...
-        float perpWallDist = rayDist * length(rayDir.xy); 
+        
+        // Calculate Camera Forward Vector (Rotated)
+        vec3 forwardUnrot = vec3(u_player_dir, 0.0);
+        vec3 forwardRot = forwardUnrot * cp + cross(rightAxis, forwardUnrot) * sp + rightAxis * dot(rightAxis, forwardUnrot) * (1.0 - cp);
+        
+        float perpWallDist = dot(rayDir * rayDist, forwardRot);
         
         // If we didnt hit a wall (Sky/Void), the depth is infinite
         if (hit != 1) perpWallDist = 10000.0;
@@ -520,7 +524,7 @@ init 10 python:
         float currentDepth = perpWallDist;
         
         // Precalculate pitch shift in pixels for sprites
-        float pitchPixeLCTRL = u_pitch * u_vertical_scale * (u_resolution.y / 2.0);
+        // float pitchPixeLCTRL = u_pitch * u_vertical_scale * (u_resolution.y / 2.0);
 
         float invDet = 1.0 / (u_player_plane.x * u_player_dir.y - u_player_dir.x * u_player_plane.y);
 
@@ -537,29 +541,33 @@ init 10 python:
 
             float transformX = invDet * (u_player_dir.y * spX - u_player_dir.x * spY);
             float transformY = invDet * (-u_player_plane.y * spX + u_player_plane.x * spY); 
+            
+            // Apply Pitch Rotation to Sprite Position
+            float camHeight = 0.5 + u_z_offset;
+            float spriteZ = -camHeight;
+            
+            float rotY = transformY * cp + spriteZ * sp;
+            float rotZ = -transformY * sp + spriteZ * cp;
 
-            if (transformY <= 0.1) continue;
+            if (rotY <= 0.1) continue;
             // Robust depth check
-            if (transformY >= currentDepth) continue; 
+            if (rotY >= currentDepth) continue; 
 
-            float spriteScreenX = (u_resolution.x / 2.0) * (1.0 + transformX / transformY);
+            float spriteScreenX = (u_resolution.x / 2.0) * (1.0 + transformX / rotY);
             
             // Scale sprites down
             float spriteScale = 0.55; 
-            float spriteHeight = abs(u_resolution.y / transformY) * u_vertical_scale * spriteScale; 
+            float spriteHeight = abs(u_resolution.y / rotY) * u_vertical_scale * spriteScale; 
             float spriteWidth = spriteHeight; 
 
             // Sprite Anchoring Logic (Floor Alignment)
-            // Calculate where the floor (Z=0) is on screen at the sprite's depth
-            // Camera Height = 0.5 + u_z_offset
-            float camHeight = 0.5 + u_z_offset;
-            
-            // Projection of floor: Center + (CamHeight / Depth * Scale * Res/2) + Pitch
-            float floorPixelOffset = (camHeight / transformY) * u_vertical_scale * (u_resolution.y / 2.0);
+            // Calculate Screen Y of the floor (rotZ)
+            float screenY_floor = (rotZ / rotY) * u_vertical_scale;
+            float pixelY_floor = (0.5 - screenY_floor / 2.0) * u_resolution.y;
             
             float spritePixeLCTRL = spritePitch * u_vertical_scale * (u_resolution.y / 2.0);
             
-            float drawEndY = (u_resolution.y / 2.0) + floorPixelOffset + pitchPixeLCTRL - spritePixeLCTRL;
+            float drawEndY = pixelY_floor - spritePixeLCTRL;
             float drawStartY = drawEndY - spriteHeight;
             
             float drawStartX = spriteScreenX - spriteWidth / 2.0;
