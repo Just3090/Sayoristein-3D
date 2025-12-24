@@ -367,7 +367,7 @@ screen sayoristein_arena_hub():
             xalign 0.5
 
         textbutton _("Start Arena") action Jump("start_level_4_arena") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
-        textbutton _("Upgrades") action ShowMenu("sayoristein_upgrades") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
+        # textbutton _("Upgrades") action ShowMenu("sayoristein_upgrades") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
         textbutton _("Back") action ShowMenu("sayoristein_level_select") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
 
 init python:
@@ -448,50 +448,8 @@ init python:
         return Text("\n".join(debug_info), size=22, color="#00FF00", outlines=[(2, "#000000", 0, 0)], font="mod_assets/fonts/BebasNeue-Regular.ttf"), 0.05
 
     def buy_stein_upgrade(upgrade_type):
-        if upgrade_type == "pistol":
-            cost = 1000 + (persistent.stein_pistol_level * 100)
-            if persistent.tradu_coins >= cost:
-                persistent.tradu_coins -= cost
-                persistent.stein_pistol_level += 1
-                renpy.restart_interaction()
-            else:
-                renpy.show_screen("stein_locked_message", msg=__("Not enough Tradu-Coins!"))
+        pass
 
-        elif upgrade_type == "shotgun":
-            cost = 1000 + (persistent.stein_shotgun_level * 100)
-            if persistent.tradu_coins >= cost:
-                persistent.tradu_coins -= cost
-                persistent.stein_shotgun_level += 1
-                renpy.restart_interaction()
-            else:
-                renpy.show_screen("stein_locked_message", msg=__("Not enough Tradu-Coins!"))
-        
-        elif upgrade_type == "unlock_shotgun":
-            cost = 25000
-            if persistent.tradu_coins >= cost:
-                persistent.tradu_coins -= cost
-                persistent.stein_shotgun_unlocked = True
-                renpy.restart_interaction()
-            else:
-                renpy.show_screen("stein_locked_message", msg=__("Not enough Tradu-Coins!"))
-
-        elif upgrade_type == "minigun":
-            cost = 50 + (persistent.stein_minigun_level * 15)
-            if persistent.tradu_coins >= cost:
-                persistent.tradu_coins -= cost
-                persistent.stein_minigun_level += 1
-                renpy.restart_interaction()
-            else:
-                renpy.show_screen("stein_locked_message", msg=__("Not enough Tradu-Coins!"))
-
-        elif upgrade_type == "unlock_minigun":
-            cost = 50000
-            if persistent.tradu_coins >= cost:
-                persistent.tradu_coins -= cost
-                persistent.stein_minigun_unlocked = True
-                renpy.restart_interaction()
-            else:
-                renpy.show_screen("stein_locked_message", msg=__("Not enough Tradu-Coins!"))
 
 screen sayoristein_upgrades():
     tag menu

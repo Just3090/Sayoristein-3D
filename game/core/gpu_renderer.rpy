@@ -1076,13 +1076,14 @@ init 10 python:
                                         if renpy.random.random() < drop_prob:
                                             self.wm.sprite_positions.append((enemy.x, enemy.y, enemy.coin_index)) # Coins
 
-                                        if not renpy.store.stein_has_shotgun:
-                                            if renpy.random.random() < (0.25 if enemy.coin_index == 12 else 0.10):
-                                                self.wm.sprite_positions.append((enemy.x, enemy.y, 13)) # Shotgun
+                                        # Weapon drops removed as per request
+                                        # if not renpy.store.stein_has_shotgun:
+                                        #     if renpy.random.random() < (0.25 if enemy.coin_index == 12 else 0.10):
+                                        #         self.wm.sprite_positions.append((enemy.x, enemy.y, 13)) # Shotgun
                                         
-                                        if not renpy.store.stein_has_minigun:
-                                            if renpy.random.random() < 0.10:
-                                                self.wm.sprite_positions.append((enemy.x, enemy.y, 15)) # Minigun
+                                        # if not renpy.store.stein_has_minigun:
+                                        #     if renpy.random.random() < 0.10:
+                                        #         self.wm.sprite_positions.append((enemy.x, enemy.y, 15)) # Minigun
 
                                 return False
             return True
@@ -1932,10 +1933,11 @@ init 10 python:
                 joy.init()
 
             self.gun_dmg = 50; self.shotgun_dmg = 35; self.minigun_dmg = 40
-            if self.is_arena_mode:
-                self.gun_dmg += 50 * (persistent.stein_pistol_level * 0.01)
-                self.shotgun_dmg += 35 * (persistent.stein_shotgun_level * 0.01)
-                self.minigun_dmg += 3 * (persistent.stein_minigun_level * 0.10)
+            # Damage upgrades removed as per request
+            # if self.is_arena_mode:
+            #     self.gun_dmg += 50 * (persistent.stein_pistol_level * 0.01)
+            #     self.shotgun_dmg += 35 * (persistent.stein_shotgun_level * 0.01)
+            #     self.minigun_dmg += 3 * (persistent.stein_minigun_level * 0.10)
 
             self.weapon_library = {}
             
