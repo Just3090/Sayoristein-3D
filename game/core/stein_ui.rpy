@@ -26,9 +26,9 @@ screen stein_controls_overlay():
             yalign 0.02
 
     # Temporary Debug Display
-    add DynamicDisplayable(gamepad_debug_displayable):
-        xalign 0.99
-        yalign 0.5
+    # add DynamicDisplayable(gamepad_debug_displayable):
+    #     xalign 0.99
+    #     yalign 0.5
 
 # Style for the text inside the buttons on this screen.
 style stein_controls_overlay_textbutton_text:
