@@ -283,8 +283,8 @@ init 10 python:
             
             vec3 ambientLight = u_ambient_color; 
             
-            float personalLight = max(0.0, 1.0 - (fogDist / 4.0)); 
-            ambientLight += u_ambient_near_color * personalLight;
+            // float personalLight = max(0.0, 1.0 - (fogDist / 4.0)); 
+            // ambientLight += u_ambient_near_color * personalLight;
             
             vec3 totalLight = ambientLight;
 
@@ -593,8 +593,8 @@ init 10 python:
                         float sprDist = length(vec2(spX, spY)); 
                         
                         vec3 sprLight = u_ambient_color;
-                        float sprPersonal = max(0.0, 1.0 - (sprDist / 4.0));
-                        sprLight += u_ambient_near_color * sprPersonal;
+                        // float sprPersonal = max(0.0, 1.0 - (sprDist / 4.0));
+                        // sprLight += u_ambient_near_color * sprPersonal;
 
                         if (u_flashlight_active > 0.5) {
                             float dotProd = dot(rayDir, flashDir);
