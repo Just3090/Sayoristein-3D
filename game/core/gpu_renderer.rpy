@@ -120,6 +120,40 @@ init 10 python:
             float n = noise(p);
             return smoothstep(0.85, 1.0, n);
         }
+
+        float intersectPyramid(vec3 ro, vec3 rd, out vec3 outNormal) {
+            float tMin = 10000.0;
+            bool hit = false;
+            
+            vec3 N[4]; float D[4];
+            N[0] = vec3(1.0, 0.0, 1.0); D[0] = -1.0;
+            N[1] = vec3(-1.0, 0.0, 1.0); D[1] = 0.0;
+            N[2] = vec3(0.0, 1.0, 1.0); D[2] = -1.0;
+            N[3] = vec3(0.0, -1.0, 1.0); D[3] = 0.0;
+            
+            for(int i=0; i<4; i++) {
+                float denom = dot(rd, N[i]);
+                if (denom < -0.0001) {
+                    float t = -(dot(ro, N[i]) + D[i]) / denom;
+                    if (t > 0.0) {
+                        vec3 p = ro + rd * t;
+                        if (p.z >= 0.0 && p.z <= 0.5) {
+                            float h = 0.5 - p.z;
+                            if (p.x >= 0.5 - h - 0.01 && p.x <= 0.5 + h + 0.01 &&
+                                p.y >= 0.5 - h - 0.01 && p.y <= 0.5 + h + 0.01) {
+                                if (t < tMin) {
+                                    tMin = t;
+                                    outNormal = normalize(N[i]);
+                                    hit = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (hit) return tMin;
+            return -1.0;
+        }
     """, fragment_300="""
         const int MAX_STEPS = 128; 
         
@@ -168,6 +202,7 @@ init 10 python:
         int side = 0; // 0=X, 1=Y, 2=Z
         int wallID = 0;
         float rayDist = 0.0;
+        vec3 hitNormal = vec3(0.0);
 
         for (int i = 0; i < MAX_STEPS; i++) {
             if (sideDist.x < sideDist.y) {
@@ -209,9 +244,22 @@ init 10 python:
                 mapUV = mapUV * u_map_uv_scale;
                 vec4 mapPixel = texture2D(u_map_texture, mapUV);
                 if (mapPixel.r > 0.5) {
-                    wallID = int(mapPixel.g * 255.0 + 0.5);
-                    hit = 1;
-                    break;
+                    int id = int(mapPixel.g * 255.0 + 0.5);
+                    if (id == 20) {
+                        vec3 norm;
+                        float t = intersectPyramid(rayPos - vec3(mapPos), rayDir, norm);
+                        if (t > 0.0 && t >= rayDist - 0.01) {
+                            rayDist = t;
+                            wallID = id;
+                            hit = 1;
+                            hitNormal = norm;
+                            break;
+                        }
+                    } else {
+                        wallID = id;
+                        hit = 1;
+                        break;
+                    }
                 }
             } else if (mapPos.z < 0) {
                 if (mapPos.z == -1) {
@@ -246,18 +294,26 @@ init 10 python:
                 }
             } else {
                 vec2 texUV;
-                if (side == 0) { // X-Side
-                    float wallX = hitPos.y; 
-                    if (rayDir.x > 0.0) wallX = 1.0 - wallX;
-                    texUV = vec2(fract(wallX), fract(1.0 - hitPos.z));
-                } 
-                else if (side == 1) { // Y-Side
-                    float wallX = hitPos.x;
-                    if (rayDir.y < 0.0) wallX = 1.0 - wallX;
-                    texUV = vec2(fract(wallX), fract(1.0 - hitPos.z));
-                }
-                else { // Side 2 (Wall Top/Bottom)
-                    texUV = vec2(fract(hitPos.x), fract(hitPos.y));
+                if (wallID == 20) {
+                    if (abs(hitNormal.x) > 0.5) {
+                        texUV = vec2(fract(hitPos.y), fract(hitPos.z * 2.0));
+                    } else {
+                        texUV = vec2(fract(hitPos.x), fract(hitPos.z * 2.0));
+                    }
+                } else {
+                    if (side == 0) { // X-Side
+                        float wallX = hitPos.y; 
+                        if (rayDir.x > 0.0) wallX = 1.0 - wallX;
+                        texUV = vec2(fract(wallX), fract(1.0 - hitPos.z));
+                    } 
+                    else if (side == 1) { // Y-Side
+                        float wallX = hitPos.x;
+                        if (rayDir.y < 0.0) wallX = 1.0 - wallX;
+                        texUV = vec2(fract(wallX), fract(1.0 - hitPos.z));
+                    }
+                    else { // Side 2 (Wall Top/Bottom)
+                        texUV = vec2(fract(hitPos.x), fract(hitPos.y));
+                    }
                 }
                 
                 float texRes = 64.0;
@@ -371,9 +427,14 @@ init 10 python:
 
                                 vec2 mapUV = (floor(checkPos) + 0.5) / u_map_size;
                                 mapUV *= u_map_uv_scale;
-                                if (texture2D(u_map_texture, mapUV).r > 0.5) {
-                                    hitWall = true;
-                                    break;
+                                vec4 shadowMapPixel = texture2D(u_map_texture, mapUV);
+                                if (shadowMapPixel.r > 0.5) {
+                                    // Check id to avoid pyramid casting cube shadows
+                                    int sID = int(shadowMapPixel.g * 255.0 + 0.5);
+                                    if (sID != 20) {
+                                        hitWall = true;
+                                        break;
+                                    }
                                 }
                             }
                             
@@ -394,8 +455,12 @@ init 10 python:
             }
 
             float faceShadow = 1.0;
-            if (side == 1) faceShadow = 0.7; 
-            if (side == 2) faceShadow = 1.0; 
+            if (wallID == 20) {
+                faceShadow = 0.6 + 0.4 * hitNormal.z;
+            } else {
+                if (side == 1) faceShadow = 0.7; 
+                if (side == 2) faceShadow = 1.0; 
+            }
             
             color = finalColor * totalLight * faceShadow;
 
@@ -668,9 +733,13 @@ init 10 python:
                                             
                                             vec2 mapUV = (floor(checkPos) + 0.5) / u_map_size;
                                             mapUV *= u_map_uv_scale;
-                                            if (texture2D(u_map_texture, mapUV).r > 0.5) {
-                                                hitWall = true;
-                                                break;
+                                            vec4 smp = texture2D(u_map_texture, mapUV);
+                                            if (smp.r > 0.5) {
+                                                int sid = int(smp.g * 255.0 + 0.5);
+                                                if (sid != 20) {
+                                                    hitWall = true;
+                                                    break;
+                                                }
                                             }
                                         }
                                         
@@ -976,40 +1045,84 @@ init 10 python:
             self.is_grounded = True; self.is_crouching = False
             self.crouch_timer = 0.0; self.crouch_duration = 0.06
 
-        def get_ground_height_at(self, x, y): return 0.0
+        def get_ground_height_at(self, x, y):
+            if x < 0 or x >= self.wm.mapWidth or y < 0 or y >= self.wm.mapHeight: return 0.0
+            tile = self.wm.worldMap[int(x)][int(y)]
+            if tile == 0: return 0.0
+            if tile == 20: return 0.5
+            return 1.0
 
         def trigger_jump(self):
             if self.is_grounded and not self.is_crouching:
                 self.is_crouching = True; self.crouch_timer = self.crouch_duration
 
         def update_physics(self, dt):
+            floor_h = self.get_ground_height_at(self.x, self.y)
+            
             if self.is_crouching:
                 self.crouch_timer -= dt
                 progress = 1.0 - (self.crouch_timer / self.crouch_duration)
-                self.z = self.get_ground_height_at(self.x, self.y) + (self.CROUCH_DEPTH * math.sin(progress * math.pi))
+                self.z = floor_h + (self.CROUCH_DEPTH * math.sin(progress * math.pi))
                 if self.crouch_timer <= 0:
                     self.is_crouching = False; self.is_grounded = False; self.velocity_z = self.JUMP_FORCE
+                    self.z = max(self.z, floor_h)
+            
+            if self.is_grounded:
+                if self.z > floor_h + 0.1:
+                    self.is_grounded = False
+                else:
+                    self.z = floor_h
+            
             if not self.is_grounded:
                 self.velocity_z -= self.GRAVITY * dt
                 self.z += self.velocity_z * dt
-                floor_h = self.get_ground_height_at(self.x, self.y)
-                if self.z <= floor_h:
-                    self.z = floor_h; self.velocity_z = 0.0; self.is_grounded = True
+                
+                # Check landing
+                current_floor = self.get_ground_height_at(self.x, self.y)
+                if self.z <= current_floor:
+                    self.z = current_floor; self.velocity_z = 0.0; self.is_grounded = True
+
+        def resolve_wall_collision(self, radius):
+            # Right
+            if self.wm.isBlocking(math.floor(self.x + radius), math.floor(self.y), self.z):
+                self.x = math.floor(self.x + radius) - radius - 0.001
+            # Left
+            elif self.wm.isBlocking(math.floor(self.x - radius), math.floor(self.y), self.z):
+                self.x = math.floor(self.x - radius) + 1.0 + radius + 0.001
+            
+            # Down
+            if self.wm.isBlocking(math.floor(self.x), math.floor(self.y + radius), self.z):
+                self.y = math.floor(self.y + radius) - radius - 0.001
+            # Up
+            elif self.wm.isBlocking(math.floor(self.x), math.floor(self.y - radius), self.z):
+                self.y = math.floor(self.y - radius) + 1.0 + radius + 0.001
 
         def move(self, dt):
             self.update_physics(dt)
+            self.resolve_wall_collision(0.3)
+
             moveStep = self.speed * self.moveSpeed * dt
             strafeStep = self.strafe_speed * self.moveSpeed * dt
             self.rot += self.dir * self.rotSpeed * dt
             self.rot %= twoPI
             self.planerot += self.dir * self.rotSpeed * dt
             self.planerot %= twoPI
-            newX = self.x + math.cos(self.rot) * moveStep + math.cos(self.planerot) * strafeStep
-            newY = self.y + math.sin(self.rot) * moveStep + math.sin(self.planerot) * strafeStep
+            
+            vx = math.cos(self.rot) * moveStep + math.cos(self.planerot) * strafeStep
+            vy = math.sin(self.rot) * moveStep + math.sin(self.planerot) * strafeStep
+            
+            # Move X
+            newX = self.x + vx
+            pos = self.wm.checkCollision(self.x, self.y, newX, self.y, 0.3, self.z)
+            self.x = pos[0]
+            
+            # Move Y
+            newY = self.y + vy
+            pos = self.wm.checkCollision(self.x, self.y, self.x, newY, 0.3, self.z)
+            self.y = pos[1]
+
             self.dirx = math.cos(self.rot); self.diry = math.sin(self.rot)
             self.planex = math.cos(self.planerot); self.planey = math.sin(self.planerot)
-            position = self.wm.checkCollision(self.x, self.y, newX, newY, 0.45)
-            self.x = position[0]; self.y = position[1]
 
     class Projectile(object):
         def __init__(self, wm, x, y, dir_x, dir_y, texture_index, damage, fired_by_player=False, is_invisible=False, pitch=0.0):
@@ -1026,8 +1139,22 @@ init 10 python:
             
             if self.fired_by_player:
                 self.speed = 100.0 
+                self.z = self.wm.player.z + 0.5
+                self.dir_z = (pitch / float(self.wm.height))
             else:
                 self.speed = 12.0
+                ground_h = self.wm.player.get_ground_height_at(x, y)
+                self.z = ground_h + 0.5
+                
+                p_x = self.wm.player.x
+                p_y = self.wm.player.y
+                p_z = self.wm.player.z + 0.3
+                
+                dist_2d = math.sqrt((p_x - x)**2 + (p_y - y)**2)
+                if dist_2d > 0:
+                    self.dir_z = (p_z - self.z) / dist_2d
+                else:
+                    self.dir_z = 0.0
 
         def update(self, dt):
             distance_to_travel = self.speed * dt
@@ -1040,50 +1167,54 @@ init 10 python:
                 
                 self.x += self.dir_x * step
                 self.y += self.dir_y * step
+                self.z += self.dir_z * step
                 dist_traveled += step
 
-                if self.wm.isBlocking(self.x, self.y): 
+                if self.wm.isBlocking(math.floor(self.x), math.floor(self.y), self.z): 
+                    return False
+                
+                ground_h = self.wm.player.get_ground_height_at(self.x, self.y)
+                if self.z < ground_h:
                     return False
 
                 if not self.fired_by_player:
                     player = self.wm.player
                     if math.sqrt((player.x - self.x)**2 + (player.y - self.y)**2) < 0.5:
-                        player.health -= self.damage
-                        self.wm.add_damage_indicator(-self.dir_x, -self.dir_y)
-                        self.wm.damage_flash_timer = 0.2
-                        self.wm.time_since_last_damage = 0.0
-                        renpy.sound.play("sounds/ow.ogg", channel="audio")
-                        return False
+                        if self.z >= player.z and self.z <= player.z + 0.9:
+                            player.health -= self.damage
+                            self.wm.add_damage_indicator(-self.dir_x, -self.dir_y)
+                            self.wm.damage_flash_timer = 0.2
+                            self.wm.time_since_last_damage = 0.0
+                            renpy.sound.play("sounds/ow.ogg", channel="audio")
+                            return False
                 else:
                     for enemy in list(self.wm.enemies):
                         if math.sqrt((enemy.x - self.x)**2 + (enemy.y - self.y)**2) < 0.5:
-                            if hasattr(self, 'pitch'):
-                                safe_dist = max(0.1, math.sqrt((enemy.x - self.x)**2 + (enemy.y - self.y)**2))
-                                enemy_vis_height = self.wm.height / safe_dist
-                                calc_height = min(enemy_vis_height, self.wm.height * 1.2)
-                                if abs(self.pitch) > (calc_height / 2.0) * 0.2: 
-                                    continue
+                            e_ground = self.wm.player.get_ground_height_at(enemy.x, enemy.y)
+                            if self.z >= e_ground and self.z <= e_ground + 0.9:
+                                if hasattr(self, 'pitch'):
+                                    pass
 
-                            taken = True
-                            if hasattr(enemy, 'take_damage'): 
-                                taken = enemy.take_damage(self.damage)
-                            else:
-                                enemy.health -= self.damage
-                            
-                            if taken:
-                                self.wm.hit_marker_timer = 0.15
-                                renpy.sound.play("sounds/ow.ogg", channel="audio")
-                                if enemy.health <= 0:
-                                    if self.wm.is_arena_mode: persistent.stein_kills += 1
-                                    if enemy in self.wm.enemies: self.wm.enemies.remove(enemy)
-                                    self.wm.sprite_positions.append((enemy.x, enemy.y, enemy.destroyed_texture_index))
-                                    
-                                    if self.wm.is_arena_mode:
-                                        drop_prob = 1.0 if enemy.coin_index == 12 else 0.35
-                                        if renpy.random.random() < drop_prob:
-                                            self.wm.sprite_positions.append((enemy.x, enemy.y, enemy.coin_index)) # Coins
+                                taken = True
+                                if hasattr(enemy, 'take_damage'): 
+                                    taken = enemy.take_damage(self.damage)
+                                else:
+                                    enemy.health -= self.damage
+                                
+                                if taken:
+                                    self.wm.hit_marker_timer = 0.15
+                                    renpy.sound.play("sounds/ow.ogg", channel="audio")
+                                    if enemy.health <= 0:
+                                        if self.wm.is_arena_mode: persistent.stein_kills += 1
+                                        if enemy in self.wm.enemies: self.wm.enemies.remove(enemy)
+                                        self.wm.sprite_positions.append((enemy.x, enemy.y, enemy.destroyed_texture_index))
+                                        
+                                        if self.wm.is_arena_mode:
+                                            drop_prob = 1.0 if enemy.coin_index == 12 else 0.35
+                                            if renpy.random.random() < drop_prob:
+                                                self.wm.sprite_positions.append((enemy.x, enemy.y, enemy.coin_index)) # Coins
 
-                                        # Weapon drops removed as per request
+                                        # Weapon drops removed as per request (by Fran)
                                         # if not renpy.store.stein_has_shotgun:
                                         #     if renpy.random.random() < (0.25 if enemy.coin_index == 12 else 0.10):
                                         #         self.wm.sprite_positions.append((enemy.x, enemy.y, 13)) # Shotgun
@@ -1092,7 +1223,7 @@ init 10 python:
                                         #     if renpy.random.random() < 0.10:
                                         #         self.wm.sprite_positions.append((enemy.x, enemy.y, 15)) # Minigun
 
-                                return False
+                                    return False
             return True
 
     class BaseEnemy(object):
@@ -2659,43 +2790,45 @@ init 10 python:
                 for e in list(self.enemies):
                     dist = math.sqrt((e.x - self.player.x)**2 + (e.y - self.player.y)**2)
                     if dist < 1.5: 
-                        taken = True
-                        if hasattr(e, 'take_damage'):
-                            taken = e.take_damage(weapon.damage)
-                        else:
-                            e.health -= weapon.damage
+                        e_ground = self.player.get_ground_height_at(e.x, e.y)
+                        if abs(self.player.z - e_ground) < 1.0:
+                            taken = True
+                            if hasattr(e, 'take_damage'):
+                                taken = e.take_damage(weapon.damage)
+                            else:
+                                e.health -= weapon.damage
 
-                        if taken:
-                            hit = True
-                            self.hit_marker_timer = 0.15
-                            
-                            if e.health <= 0:
-                                renpy.sound.play("sounds/ow.ogg", channel="audio")
-                                if self.is_arena_mode:
-                                    persistent.stein_kills += 1
+                            if taken:
+                                hit = True
+                                self.hit_marker_timer = 0.15
                                 
-                                if e in self.enemies:
-                                    self.enemies.remove(e)
-                                
-                                self.sprite_positions.append((e.x, e.y, e.destroyed_texture_index))
-                                
-                                
-                                # Arena Mode Drops
-                                if self.is_arena_mode:
-                                    drop_prob = 1.0 if e.coin_index == 12 else 0.35
-                                    if renpy.random.random() < drop_prob:
-                                        self.sprite_positions.append((e.x, e.y, e.coin_index))
+                                if e.health <= 0:
+                                    renpy.sound.play("sounds/ow.ogg", channel="audio")
+                                    if self.is_arena_mode:
+                                        persistent.stein_kills += 1
                                     
-                                    if not renpy.store.stein_has_shotgun:
-                                        shotgun_prob = 0.25 if e.coin_index == 12 else 0.10
-                                        if renpy.random.random() < shotgun_prob:
-                                            self.sprite_positions.append((e.x, e.y, 13))
-                                            
-                                    if not renpy.store.stein_has_minigun:
-                                        if renpy.random.random() < 0.10:
-                                            self.sprite_positions.append((e.x, e.y, 15))
-                            
-                            break
+                                    if e in self.enemies:
+                                        self.enemies.remove(e)
+                                    
+                                    self.sprite_positions.append((e.x, e.y, e.destroyed_texture_index))
+                                    
+                                    
+                                    # Arena Mode Drops
+                                    if self.is_arena_mode:
+                                        drop_prob = 1.0 if e.coin_index == 12 else 0.35
+                                        if renpy.random.random() < drop_prob:
+                                            self.sprite_positions.append((e.x, e.y, e.coin_index))
+                                        
+                                        if not renpy.store.stein_has_shotgun:
+                                            shotgun_prob = 0.25 if e.coin_index == 12 else 0.10
+                                            if renpy.random.random() < shotgun_prob:
+                                                self.sprite_positions.append((e.x, e.y, 13))
+                                                
+                                        if not renpy.store.stein_has_minigun:
+                                            if renpy.random.random() < 0.10:
+                                                self.sprite_positions.append((e.x, e.y, 15))
+                                
+                                break
 
                 if hit and not any(e.health <= 0 for e in self.enemies): 
                     pass
@@ -2704,17 +2837,33 @@ init 10 python:
             angle = math.atan2(source_dir_y, source_dir_x)
             self.damage_indicators.append(DamageIndicator(angle))
 
-        def isBlocking(self, x, y):
+        def isBlocking(self, x, y, z=0.0):
             if x < 0 or x >= self.mapWidth or y < 0 or y >= self.mapHeight: return True
-            return self.worldMap[int(x)][int(y)] != 0
+            tile = self.worldMap[int(x)][int(y)]
+            if tile == 0: return False
+            
+            h = 1.0
+            if tile == 20: h = 0.5
+            
+            if z >= h: return False
+            return True
 
-        def checkCollision(self, fromX, fromY, toX, toY, radius):
-            pos = [fromX, fromY]
-            if toY < 0 or toY >= self.mapHeight or toX < 0 or toX >= self.mapWidth: return pos
-            blockX = math.floor(toX); blockY = math.floor(toY)
-            if self.isBlocking(blockX, blockY): return pos
-            pos[0] = toX; pos[1] = toY
-            return pos
+        def checkCollision(self, fromX, fromY, toX, toY, radius, z=0.0):
+            # Check center
+            if self.isBlocking(math.floor(toX), math.floor(toY), z):
+                return [fromX, fromY]
+            
+            # Check radius
+            points = [
+                (toX + radius, toY), (toX - radius, toY),
+                (toX, toY + radius), (toX, toY - radius)
+            ]
+            
+            for px, py in points:
+                if self.isBlocking(math.floor(px), math.floor(py), z):
+                    return [fromX, fromY]
+            
+            return [toX, toY]
 
         # EVENT HANDLING
         def event(self, ev, x, y, st):
