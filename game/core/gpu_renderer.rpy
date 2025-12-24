@@ -114,11 +114,47 @@ init 10 python:
             return v;
         }
 
+        float ripple_layer(vec2 uv, float t) {
+            vec2 p = uv * 5.0;
+            vec2 g = floor(p);
+            vec2 f = fract(p) - 0.5;
+            
+            vec2 rand_offset = (vec2(hash(g), hash(g + 11.5)) - 0.5) * 0.8;
+            f -= rand_offset;
+            
+            float h = hash(g + vec2(3.0, 7.0));
+            float t_local = fract(t * 1.2 + h * 10.0);
+            
+            float d = length(f);
+            float r = 0.5 * t_local;
+            
+            float circle = smoothstep(0.05, 0.0, abs(d - r));
+            float fade = 1.0 - t_local;
+            
+            return circle * fade;
+        }
+
         float rain_layer(vec2 uv, float t) {
-            vec2 p = uv;
-            p.y += t;
-            float n = noise(p);
-            return smoothstep(0.85, 1.0, n);
+            vec2 st = uv;
+            st.x *= 20.0; 
+            st.y *= 0.5;  
+            
+            vec2 g = floor(st);
+            
+            float col_offset = hash(vec2(g.x, 0.0)); 
+            float y_move = st.y + t + col_offset * 10.0;
+            
+            float cell_y = floor(y_move);
+            float cell_fract = fract(y_move);
+            
+            float h = hash(vec2(g.x, cell_y));
+            
+            if (h < 0.85) return 0.0;
+            
+            float drop = 1.0 - cell_fract; 
+            float beam = smoothstep(0.4, 0.5, fract(st.x)) * smoothstep(0.6, 0.5, fract(st.x));
+            
+            return drop * beam;
         }
 
         float intersectPyramid(vec3 ro, vec3 rd, out vec3 outNormal) {
@@ -289,8 +325,9 @@ init 10 python:
                 }
 
                 if (u_rain_intensity > 0.0) {
-                    float splash = step(0.98, hash(hitPos.xy * 10.0 + u_time * 5.0));
-                    color += vec3(splash * 0.3 * u_rain_intensity);
+                    float r = ripple_layer(hitPos.xy, u_time);
+                    r += ripple_layer(hitPos.xy + vec2(0.5, 0.5), u_time + 0.5);
+                    color += vec3(r * 0.3 * u_rain_intensity);
                 }
             } else {
                 vec2 texUV;
