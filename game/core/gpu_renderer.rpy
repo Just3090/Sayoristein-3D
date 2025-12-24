@@ -1051,6 +1051,7 @@ init 10 python:
                         player.health -= self.damage
                         self.wm.add_damage_indicator(-self.dir_x, -self.dir_y)
                         self.wm.damage_flash_timer = 0.2
+                        self.wm.time_since_last_damage = 0.0
                         renpy.sound.play("sounds/ow.ogg", channel="audio")
                         return False
                 else:
@@ -1076,8 +1077,6 @@ init 10 python:
                                     if self.wm.is_arena_mode: persistent.stein_kills += 1
                                     if enemy in self.wm.enemies: self.wm.enemies.remove(enemy)
                                     self.wm.sprite_positions.append((enemy.x, enemy.y, enemy.destroyed_texture_index))
-                                    if renpy.random.random() < 0.40:
-                                        self.wm.sprite_positions.append((enemy.x, enemy.y, 7)) # Medkit
                                     
                                     if self.wm.is_arena_mode:
                                         drop_prob = 1.0 if enemy.coin_index == 12 else 0.35
@@ -1883,6 +1882,7 @@ init 10 python:
             self.heal_flash_timer = 0.0
             self.hit_marker_timer = 0.0
             self.damage_indicators = []
+            self.time_since_last_damage = 0.0
             
             self.pickup_msg = ""
             self.pickup_msg_timer = 0.0
@@ -2558,6 +2558,12 @@ init 10 python:
                         self.weather_timer = 6.0
 
         def update_logic(self, dt):
+            self.time_since_last_damage += dt
+            if self.time_since_last_damage > 2.5 and self.player.health < 100 and self.player.health > 0:
+                # Regenerate 95 HP in 3 seconds, like 31.67 hp/sec
+                heal_rate = 31.67
+                self.player.health = min(100, self.player.health + heal_rate * dt)
+
             self.update_weather(dt)
             self.hit_marker_timer = max(0, self.hit_marker_timer - dt)
             self.check_item_pickup()
@@ -2673,9 +2679,6 @@ init 10 python:
                                 
                                 self.sprite_positions.append((e.x, e.y, e.destroyed_texture_index))
                                 
-                                # Drop Medkit (40%)
-                                if renpy.random.random() < 0.40:
-                                    self.sprite_positions.append((e.x, e.y, 7))
                                 
                                 # Arena Mode Drops
                                 if self.is_arena_mode:
