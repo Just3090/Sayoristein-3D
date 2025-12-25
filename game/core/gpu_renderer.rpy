@@ -274,45 +274,49 @@ init 10 python:
             if (rayDist > u_max_dist) { hit = 2; break; } // Too far
             
             // Map Bounds Check
-            if (mapPos.x < 0 || mapPos.x >= int(u_map_size.x) || mapPos.y < 0 || mapPos.y >= int(u_map_size.y)) {
-                hit = 2; break; // Hit Sky
-            }
+            bool inside = (mapPos.x >= 0 && mapPos.x < int(u_map_size.x) && mapPos.y >= 0 && mapPos.y < int(u_map_size.y));
             
             // Voxel Check
-            int layer = int(mapPos.z);
-            int layer_idx = layer - int(u_map_layer_base_y);
-            
-            if (layer_idx >= 0 && layer_idx < int(u_map_layer_count)) {
-                float u = (float(mapPos.x) + 0.5) * u_map_tex_pixel_size.x;
-                float v_base = float(layer_idx) * u_map_layer_norm_height;
-                float v_local = (float(mapPos.y) + 0.5) * u_map_tex_pixel_size.y;
+            if (inside) {
+                int layer = int(mapPos.z);
+                int layer_idx = layer - int(u_map_layer_base_y);
                 
-                vec2 mapUV = vec2(u, v_base + v_local);
-                vec4 mapPixel = texture2D(u_map_texture, mapUV);
-                if (mapPixel.r > 0.5) {
-                    int id = int(mapPixel.g * 255.0 + 0.5);
-                    if (id == 20) {
-                        vec3 norm;
-                        float t = intersectPyramid(rayPos - vec3(mapPos), rayDir, norm);
-                        if (t > 0.0 && t >= rayDist - 0.01) {
-                            rayDist = t;
+                if (layer_idx >= 0 && layer_idx < int(u_map_layer_count)) {
+                    float u = (float(mapPos.x) + 0.5) * u_map_tex_pixel_size.x;
+                    float v_base = float(layer_idx) * u_map_layer_norm_height;
+                    float v_local = (float(mapPos.y) + 0.5) * u_map_tex_pixel_size.y;
+                    
+                    vec2 mapUV = vec2(u, v_base + v_local);
+                    vec4 mapPixel = texture2D(u_map_texture, mapUV);
+                    if (mapPixel.r > 0.5) {
+                        int id = int(mapPixel.g * 255.0 + 0.5);
+                        if (id == 20) {
+                            vec3 norm;
+                            float t = intersectPyramid(rayPos - vec3(mapPos), rayDir, norm);
+                            if (t > 0.0 && t >= rayDist - 0.01) {
+                                rayDist = t;
+                                wallID = id;
+                                hit = 1;
+                                hitNormal = norm;
+                                break;
+                            }
+                        } else {
                             wallID = id;
                             hit = 1;
-                            hitNormal = norm;
                             break;
                         }
-                    } else {
-                        wallID = id;
+                    }
+                } else if (mapPos.z < 0) {
+                    if (mapPos.z == -1) {
+                        wallID = 9;
                         hit = 1;
                         break;
                     }
                 }
-            } else if (mapPos.z < 0) {
-                if (mapPos.z == -1) {
-                    wallID = 9;
-                    hit = 1;
-                    break;
-                }
+            } else if (mapPos.z == -1) {
+                wallID = 9;
+                hit = 1;
+                break;
             }
         }
 
@@ -1091,6 +1095,7 @@ init 10 python:
             self.GRAVITY = 35.0; self.JUMP_FORCE = 8.5; self.CROUCH_DEPTH = -0.4
             self.is_grounded = True; self.is_crouching = False
             self.crouch_timer = 0.0; self.crouch_duration = 0.06
+            self.fly_mode = False
 
         def get_ground_height_at(self, x, y, check_z=None):
             if x < 0 or x >= self.wm.mapWidth or y < 0 or y >= self.wm.mapHeight: return 0.0
@@ -1128,6 +1133,19 @@ init 10 python:
                 self.is_crouching = True; self.crouch_timer = self.crouch_duration
 
         def update_physics(self, dt):
+            if self.fly_mode:
+                self.is_grounded = False
+                self.velocity_z = 0.0
+                
+                fly_speed = 5.0
+                if self.wm.kb_running: fly_speed = 10.0
+                
+                if self.wm.kb_fly_up:
+                    self.z += fly_speed * dt
+                if self.wm.kb_fly_down:
+                    self.z -= fly_speed * dt
+                return
+
             floor_h = self.get_ground_height_at(self.x, self.y)
             
             if self.is_crouching:
@@ -1154,6 +1172,8 @@ init 10 python:
                     self.z = current_floor; self.velocity_z = 0.0; self.is_grounded = True
 
         def resolve_wall_collision(self, radius):
+            if self.fly_mode: return
+
             # Right
             if self.wm.isBlocking(math.floor(self.x + radius), math.floor(self.y), self.z):
                 self.x = math.floor(self.x + radius) - radius - 0.001
@@ -1182,15 +1202,19 @@ init 10 python:
             vx = math.cos(self.rot) * moveStep + math.cos(self.planerot) * strafeStep
             vy = math.sin(self.rot) * moveStep + math.sin(self.planerot) * strafeStep
             
-            # Move X
-            newX = self.x + vx
-            pos = self.wm.checkCollision(self.x, self.y, newX, self.y, 0.3, self.z)
-            self.x = pos[0]
-            
-            # Move Y
-            newY = self.y + vy
-            pos = self.wm.checkCollision(self.x, self.y, self.x, newY, 0.3, self.z)
-            self.y = pos[1]
+            if self.fly_mode:
+                self.x += vx
+                self.y += vy
+            else:
+                # Move X
+                newX = self.x + vx
+                pos = self.wm.checkCollision(self.x, self.y, newX, self.y, 0.3, self.z)
+                self.x = pos[0]
+                
+                # Move Y
+                newY = self.y + vy
+                pos = self.wm.checkCollision(self.x, self.y, self.x, newY, 0.3, self.z)
+                self.y = pos[1]
 
             self.dirx = math.cos(self.rot); self.diry = math.sin(self.rot)
             self.planex = math.cos(self.planerot); self.planey = math.sin(self.planerot)
@@ -1252,11 +1276,12 @@ init 10 python:
                     player = self.wm.player
                     if math.sqrt((player.x - self.x)**2 + (player.y - self.y)**2) < 0.5:
                         if self.z >= player.z and self.z <= player.z + 0.9:
-                            player.health -= self.damage
-                            self.wm.add_damage_indicator(-self.dir_x, -self.dir_y)
-                            self.wm.damage_flash_timer = 0.2
-                            self.wm.time_since_last_damage = 0.0
-                            renpy.sound.play("sounds/ow.ogg", channel="audio")
+                            if not self.wm.builder_mode:
+                                player.health -= self.damage
+                                self.wm.add_damage_indicator(-self.dir_x, -self.dir_y)
+                                self.wm.damage_flash_timer = 0.2
+                                self.wm.time_since_last_damage = 0.0
+                                renpy.sound.play("sounds/ow.ogg", channel="audio")
                             return False
                 else:
                     for enemy in list(self.wm.enemies):
@@ -2027,6 +2052,9 @@ init 10 python:
                 max_dist = 60.0
                 simple_floor = 0.0
 
+            if c.builder_mode:
+                max_dist = 500.0
+
             child_render.add_uniform('u_soft_shadows', soft_shadows)
             child_render.add_uniform('u_enable_shadows', enable_shadows)
             child_render.add_uniform('u_max_dist', max_dist)
@@ -2135,6 +2163,17 @@ init 10 python:
             self.kb_speed = 0.0
             self.kb_strafe = 0.0
             self.kb_dir = 0.0
+            self.kb_fly_up = False
+            self.kb_fly_down = False
+            self.builder_mode = False
+            self.selected_voxel = 1
+            
+            if config.developer:
+                self.builder_mode = True
+                self.player.fly_mode = True
+                self.pickup_msg = "BUILDER MODE ON (DEV)"
+                self.pickup_msg_timer = 3.0
+            
             self.gp_speed = 0.0
             self.gp_strafe = 0.0
             self.gp_dir = 0.0
@@ -2757,6 +2796,12 @@ init 10 python:
                     tw, th = timer_r.get_size()
                     r.blit(timer_r, (width/2 - tw/2, 100))
             
+            if self.builder_mode:
+                info_str = f"BUILDER MODE ON [[VOXEL: {self.selected_voxel}]]\COORDS: {self.player.x:.2f}, {self.player.y:.2f}, {self.player.z:.2f}"
+                b_text = Text(info_str, size=30, color="#00FF00", outlines=[(2, "#000", 0, 0)])
+                b_r = renpy.render(b_text, width, height, st, at)
+                r.blit(b_r, (20, 20))
+
             if self.return_value:
                 renpy.timeout(0)
 
@@ -2998,6 +3043,255 @@ init 10 python:
             
             return [toX, toY]
 
+        def isVoxel(self, x, y, z):
+            if x < 0 or x >= self.mapWidth or y < 0 or y >= self.mapHeight: return False
+            
+            layer = int(math.floor(z))
+            tile = 0
+            
+            if isinstance(self.worldMap, dict):
+                if layer in self.worldMap:
+                    grid = self.worldMap[layer]
+                    if int(x) < len(grid) and int(y) < len(grid[int(x)]):
+                        tile = grid[int(x)][int(y)]
+            else:
+                if layer == 0:
+                    tile = self.worldMap[int(x)][int(y)]
+            
+            return tile > 0
+
+        def cast_ray(self, start_x, start_y, start_z, dir_x, dir_y, dir_z, max_dist=10.0):
+            map_x = int(math.floor(start_x))
+            map_y = int(math.floor(start_y))
+            map_z = int(math.floor(start_z))
+
+            delta_dist_x = abs(1.0 / dir_x) if dir_x != 0 else 1e30
+            delta_dist_y = abs(1.0 / dir_y) if dir_y != 0 else 1e30
+            delta_dist_z = abs(1.0 / dir_z) if dir_z != 0 else 1e30
+
+            step_x = 1 if dir_x > 0 else -1
+            step_y = 1 if dir_y > 0 else -1
+            step_z = 1 if dir_z > 0 else -1
+
+            side_dist_x = (map_x + 1.0 - start_x) * delta_dist_x if dir_x > 0 else (start_x - map_x) * delta_dist_x
+            side_dist_y = (map_y + 1.0 - start_y) * delta_dist_y if dir_y > 0 else (start_y - map_y) * delta_dist_y
+            side_dist_z = (map_z + 1.0 - start_z) * delta_dist_z if dir_z > 0 else (start_z - map_z) * delta_dist_z
+
+            hit = False
+            side = 0 
+            dist = 0.0
+            
+            while dist < max_dist:
+                if side_dist_x < side_dist_y:
+                    if side_dist_x < side_dist_z:
+                        dist = side_dist_x
+                        side_dist_x += delta_dist_x
+                        map_x += step_x
+                        side = 0
+                    else:
+                        dist = side_dist_z
+                        side_dist_z += delta_dist_z
+                        map_z += step_z
+                        side = 2
+                else:
+                    if side_dist_y < side_dist_z:
+                        dist = side_dist_y
+                        side_dist_y += delta_dist_y
+                        map_y += step_y
+                        side = 1
+                    else:
+                        dist = side_dist_z
+                        side_dist_z += delta_dist_z
+                        map_z += step_z
+                        side = 2
+                
+                if self.isVoxel(map_x, map_y, map_z):
+                    hit = True
+                    break
+                
+                if map_z == -1:
+                    hit = True
+                    break
+            
+            if hit:
+                return (True, map_x, map_y, map_z, side, step_x, step_y, step_z)
+            return (False, 0, 0, 0, 0, 0, 0, 0)
+
+        def handle_builder_action(self, action):
+            u_pitch = self.player.pitch / float(self.height)
+            pitch_angle = math.atan(u_pitch)
+            
+            cp = math.cos(pitch_angle)
+            sp = math.sin(pitch_angle)
+            
+            px = self.player.planex
+            py = self.player.planey
+            plen = math.sqrt(px*px + py*py)
+            if plen == 0: plen = 1.0
+            rx = px / plen
+            ry = py / plen
+            
+            bx = self.player.dirx
+            by = self.player.diry
+            
+            cz = rx*by - ry*bx
+            dot_rb = rx*bx + ry*by
+            
+            rdx = bx * cp + 0.0 * sp + rx * dot_rb * (1.0 - cp)
+            rdy = by * cp + 0.0 * sp + ry * dot_rb * (1.0 - cp)
+            rdz = 0.0 * cp + cz * sp + 0.0 * dot_rb * (1.0 - cp)
+            
+            rdx = bx * cp + 0.0 + rx * dot_rb * (1.0 - cp)
+            rdy = by * cp + 0.0 + ry * dot_rb * (1.0 - cp)
+            rdz = 0.0 + cz * sp + 0.0
+            
+            # Normalize
+            rlen = math.sqrt(rdx*rdx + rdy*rdy + rdz*rdz)
+            if rlen > 0:
+                rdx /= rlen
+                rdy /= rlen
+                rdz /= rlen
+            
+            res = self.cast_ray(self.player.x, self.player.y, self.player.z + 0.5, rdx, rdy, rdz, max_dist=100.0)
+            
+            if res[0]: 
+                mx, my, mz, side, sx, sy, sz = res[1:]
+                
+                if action == 'remove':
+                    if mz == -1: return
+                    self.set_voxel(mx, my, mz, 0)
+                elif action == 'place':
+                    nx, ny, nz = mx, my, mz
+                    if side == 0: nx -= sx
+                    elif side == 1: ny -= sy
+                    elif side == 2: nz -= sz
+                    
+                    if math.floor(self.player.x) == nx and math.floor(self.player.y) == ny and math.floor(self.player.z) == nz:
+                        return
+                    
+                    self.set_voxel(nx, ny, nz, self.selected_voxel)
+
+        def shift_map(self, off_x, off_y):
+            self.mapWidth += off_x
+            self.mapHeight += off_y
+            self.map_w = self.mapWidth
+            self.map_h = self.mapHeight
+            
+            for z, grid in self.worldMap.items():
+                curr_w = len(grid)
+                curr_h = len(grid[0]) if curr_w > 0 else 0
+                
+                if off_x > 0:
+                    new_cols = [[0] * curr_h for _ in range(off_x)]
+                    for col in reversed(new_cols):
+                        grid.insert(0, col)
+                
+                if off_y > 0:
+                    for col in grid:
+                        for _ in range(off_y):
+                            col.insert(0, 0)
+            
+            self.player.x += off_x
+            self.player.y += off_y
+            
+            for e in self.enemies:
+                e.x += off_x
+                e.y += off_y
+                if hasattr(e, 'last_known_x') and e.last_known_x is not None: e.last_known_x += off_x
+                if hasattr(e, 'last_known_y') and e.last_known_y is not None: e.last_known_y += off_y
+            
+            for p in self.projectiles:
+                p.x += off_x
+                p.y += off_y
+            
+            new_sprites = []
+            for s in self.sprite_positions:
+                l = list(s)
+                l[0] += off_x
+                l[1] += off_y
+                new_sprites.append(tuple(l))
+            self.sprite_positions = new_sprites
+            
+            new_spawns = []
+            for s in self.spawn_points:
+                new_spawns.append((s[0] + off_x, s[1] + off_y))
+            self.spawn_points = new_spawns
+            
+            new_exits = []
+            for e in self.exits:
+                l = list(e)
+                l[0] += off_x
+                l[1] += off_y
+                new_exits.append(tuple(l))
+            self.exits = new_exits
+            
+            self.pickup_msg = f"MAP SHIFTED BY {off_x}, {off_y}"
+            self.pickup_msg_timer = 2.0
+
+        def set_voxel(self, x, y, z, val):
+            map_changed = False
+            if not isinstance(self.worldMap, dict):
+                new_map = {0: [row[:] for row in self.worldMap]}
+                self.worldMap = new_map
+                self.map_data = new_map
+            
+            off_x = 0
+            off_y = 0
+            if x < 0:
+                off_x = abs(x)
+                x = 0
+            if y < 0:
+                off_y = abs(y)
+                y = 0
+            
+            if off_x > 0 or off_y > 0:
+                self.shift_map(off_x, off_y)
+                map_changed = True
+            
+            # Check for expansion
+            if x >= self.mapWidth or y >= self.mapHeight:
+                new_w = max(self.mapWidth, x + 1)
+                new_h = max(self.mapHeight, y + 1)
+                self.expand_map(new_w, new_h)
+                map_changed = True
+
+            if z not in self.worldMap:
+                if val == 0: 
+                    if map_changed: self.map_texture = self.create_map_texture()
+                    return 
+                self.worldMap[z] = [[0 for _ in range(self.mapHeight)] for _ in range(self.mapWidth)]
+            
+            grid = self.worldMap[z]
+            if 0 <= x < len(grid) and 0 <= y < len(grid[0]):
+                grid[x][y] = val
+                map_changed = True
+                
+            if map_changed:
+                self.map_texture = self.create_map_texture()
+
+        def expand_map(self, new_w, new_h):
+            self.mapWidth = new_w
+            self.mapHeight = new_h
+            self.map_w = new_w
+            self.map_h = new_h
+            
+            for z, grid in self.worldMap.items():
+                current_w = len(grid)
+                current_h = len(grid[0]) if current_w > 0 else 0
+                
+                # Resize width
+                if new_w > current_w:
+                    for _ in range(new_w - current_w):
+                        grid.append([0] * current_h)
+                
+                # Resize height
+                for row in grid:
+                    if new_h > len(row):
+                        row.extend([0] * (new_h - len(row)))
+            
+            self.pickup_msg = f"MAP EXPANDED TO {new_w}x{new_h}"
+            self.pickup_msg_timer = 2.0
+
         # EVENT HANDLING
         def event(self, ev, x, y, st):
             if ev.type == pygame.KEYDOWN:
@@ -3079,6 +3373,24 @@ init 10 python:
                 self.player.pitch = max(-1000.0, min(1000.0, self.player.pitch))
 
             if ev.type == pygame.KEYDOWN:
+                if config.developer:
+                    if ev.key == pygame.K_o:
+                        self.builder_mode = not self.builder_mode
+                        self.player.fly_mode = self.builder_mode
+                        if self.builder_mode:
+                            self.pickup_msg = "BUILDER MODE ON"
+                            self.pickup_msg_timer = 2.0
+                        else:
+                            self.pickup_msg = "BUILDER MODE OFF"
+                            self.pickup_msg_timer = 2.0
+
+                    if ev.key == pygame.K_p:
+                        print("--- LEVEL DATA START ---")
+                        print(repr(self.worldMap))
+                        print("--- LEVEL DATA END ---")
+                        self.pickup_msg = "LEVEL DATA PRINTED"
+                        self.pickup_msg_timer = 2.0
+
                 if ev.key == pygame.K_ESCAPE:
                     pygame.mouse.set_visible(True)
                     pygame.event.set_grab(False)
@@ -3104,12 +3416,33 @@ init 10 python:
                 if ev.key == pygame.K_LEFT: self.kb_dir = 1.0
                 if ev.key == pygame.K_RIGHT: self.kb_dir = -1.0
                 
-                if ev.key == pygame.K_SPACE: self.player.trigger_jump()
+                if ev.key == pygame.K_SPACE: 
+                    if self.player.fly_mode: self.kb_fly_up = True
+                    else: self.player.trigger_jump()
                 
                 if ev.key == pygame.K_LCTRL or ev.key == pygame.K_RCTRL:
                     self.kb_running = True
 
+                if ev.key == pygame.K_LALT or ev.key == pygame.K_RALT:
+                    if self.player.fly_mode: self.kb_fly_down = True
+
             if ev.type == pygame.MOUSEBUTTONDOWN:
+                if self.builder_mode:
+                    if ev.button == 1: # Left Click - Place
+                        self.handle_builder_action('place')
+                    elif ev.button == 3: # Right Click - Remove
+                        self.handle_builder_action('remove')
+                    elif ev.button == 4: # Wheel Up
+                        self.selected_voxel = (self.selected_voxel % 9) + 1
+                        self.pickup_msg = f"VOXEL: {self.selected_voxel}"
+                        self.pickup_msg_timer = 1.0
+                    elif ev.button == 5: # Wheel Down
+                        self.selected_voxel = ((self.selected_voxel - 2) % 9) + 1
+                        self.pickup_msg = f"VOXEL: {self.selected_voxel}"
+                        self.pickup_msg_timer = 1.0
+                    
+                    return 
+
                 if ev.button == 1: # Left mouse button
                     self.mouse_firing = True
                 elif ev.button == 3: # Right mouse button (Aim)
@@ -3122,10 +3455,15 @@ init 10 python:
                     self.is_aiming = False
 
             if ev.type == pygame.KEYUP:
+                if ev.key == pygame.K_SPACE: self.kb_fly_up = False
                 if ev.key in (pygame.K_w, pygame.K_s, pygame.K_UP, pygame.K_DOWN): self.kb_speed = 0.0
                 if ev.key in (pygame.K_a, pygame.K_d): self.kb_strafe = 0.0
                 if ev.key in (pygame.K_LEFT, pygame.K_RIGHT): self.kb_dir = 0.0
-                if ev.key in (pygame.K_LCTRL, pygame.K_RCTRL): self.kb_running = False
+                if ev.key in (pygame.K_LCTRL, pygame.K_RCTRL): 
+                    self.kb_running = False
+                
+                if ev.key in (pygame.K_LALT, pygame.K_RALT):
+                    self.kb_fly_down = False
 
         def poll_gamepad(self):
             self.gp_speed = 0.0; self.gp_strafe = 0.0; self.gp_dir = 0.0
