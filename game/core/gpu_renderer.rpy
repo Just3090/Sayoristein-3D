@@ -3410,7 +3410,19 @@ init 10 python:
 
                     if ev.key == pygame.K_p:
                         print("--- LEVEL DATA START ---")
-                        print(repr(self.worldMap))
+                        if isinstance(self.worldMap, dict):
+                            print("{")
+                            for z in sorted(self.worldMap.keys()):
+                                print(f"    {z}: [")
+                                for row in self.worldMap[z]:
+                                    print(f"        {repr(row)},")
+                                print("    ],")
+                            print("}")
+                        else:
+                            print("[")
+                            for row in self.worldMap:
+                                print(f"    {repr(row)},")
+                            print("]")
                         print("--- LEVEL DATA END ---")
                         self.pickup_msg = "LEVEL DATA PRINTED"
                         self.pickup_msg_timer = 2.0
