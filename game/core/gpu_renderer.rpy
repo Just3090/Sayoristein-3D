@@ -44,8 +44,6 @@ init 10 python:
     SLOT_HANDGUN = 1
     SLOT_LONG    = 2
     SLOT_SPECIAL = 3
-    
-    VOXEL_SCALE = 4.0
 
     renpy.register_shader("stein.raycaster", variables="""
         uniform float u_volumetric_clouds;
@@ -198,13 +196,12 @@ init 10 python:
         }
     """, fragment_300="""
         const int MAX_STEPS = 128; 
-        const float VOXEL_SCALE = 4.0;
         
         vec2 stein_uv = v_tex_coord;
 
         // RAY GENERATION (3D)
         // Player Position (Camera Origin). Z=0.5 is eye level + offsets
-        vec3 rayPos = vec3(u_player_pos.x, u_player_pos.y, 0.5 + u_z_offset) * VOXEL_SCALE;
+        vec3 rayPos = vec3(u_player_pos.x, u_player_pos.y, 0.5 + u_z_offset);
         
         // Pitch Angle
         float pitchAngle = atan(u_pitch);
@@ -274,7 +271,7 @@ init 10 python:
                 }
             }
             
-            if (rayDist > u_max_dist * VOXEL_SCALE) { hit = 2; break; } // Too far
+            if (rayDist > u_max_dist) { hit = 2; break; } // Too far
             
             // Map Bounds Check
             bool inside = (mapPos.x >= 0 && mapPos.x < int(u_map_size.x) && mapPos.y >= 0 && mapPos.y < int(u_map_size.y));
@@ -327,7 +324,6 @@ init 10 python:
         
         if (hit == 1) {
             vec3 hitPos = rayPos + rayDir * rayDist;
-            vec3 worldHitPos = hitPos / VOXEL_SCALE;
             
             if (side == 2 && mapPos.z == -1) {
                 if (u_simple_floor > 0.5) {
@@ -343,8 +339,8 @@ init 10 python:
                 }
 
                 if (u_rain_intensity > 0.0) {
-                    float r = ripple_layer(worldHitPos.xy, u_time);
-                    r += ripple_layer(worldHitPos.xy + vec2(0.5, 0.5), u_time + 0.5);
+                    float r = ripple_layer(hitPos.xy, u_time);
+                    r += ripple_layer(hitPos.xy + vec2(0.5, 0.5), u_time + 0.5);
                     color += vec3(r * 0.3 * u_rain_intensity);
                 }
             } else {
@@ -390,7 +386,7 @@ init 10 python:
             
             vec3 finalColor = color;
             
-            float fogDist = length(worldHitPos.xy - u_player_pos);
+            float fogDist = length(hitPos.xy - u_player_pos);
             
             vec3 ambientLight = u_ambient_color; 
             
@@ -400,12 +396,12 @@ init 10 python:
             vec3 totalLight = ambientLight;
 
             if (u_flashlight_active > 0.5) {
-                vec3 flashPos = rayPos / VOXEL_SCALE;
+                vec3 flashPos = rayPos;
 
-                vec3 lightVec = normalize(worldHitPos - flashPos);
+                vec3 lightVec = normalize(hitPos - flashPos);
                 
                 float dotProd = dot(lightVec, flashDir); 
-                float dist3D = distance(worldHitPos, flashPos);
+                float dist3D = distance(hitPos, flashPos);
 
                 if (dotProd > 0.82) { 
                     float spotEffect = smoothstep(0.82, 0.92, dotProd);
@@ -418,7 +414,7 @@ init 10 python:
             }
 
             if (u_flash_intensity > 0.01) {
-                float distToPlayer = distance(worldHitPos.xy, u_player_pos);
+                float distToPlayer = distance(hitPos.xy, u_player_pos);
                 float flashAtt = 1.0 / (0.5 + (distToPlayer * distToPlayer) * 0.1);
                 vec3 flashColor = vec3(1.0, 0.8, 0.4);
                 totalLight += flashColor * u_flash_intensity * flashAtt * 2.0;
@@ -432,7 +428,7 @@ init 10 python:
                 float radius = lightData.z;
                 float intensity = lightData.w;
                 
-                float distToLight = distance(worldHitPos.xy, lightPos);
+                float distToLight = distance(hitPos.xy, lightPos);
                 
                 if (distToLight < radius) {
                     float visibility = 1.0;
@@ -447,7 +443,7 @@ init 10 python:
                             spread = 0.55;
                         }
                         
-                        vec2 dirToLight = normalize(lightPos - worldHitPos.xy);
+                        vec2 dirToLight = normalize(lightPos - hitPos.xy);
                         vec2 perp = vec2(-dirToLight.y, dirToLight.x) * spread;
                         
                         for (int k = 0; k < 9; k++) {
@@ -466,22 +462,21 @@ init 10 python:
                             vec2 offset = perp * offScale;
                             
                             vec2 targetPos = lightPos + offset;
-                            vec2 rayDir = normalize(targetPos - worldHitPos.xy);
-                            float rayDist = distance(targetPos, worldHitPos.xy);
+                            vec2 rayDir = normalize(targetPos - hitPos.xy);
+                            float rayDist = distance(targetPos, hitPos.xy);
                             
                             float stepSize = 0.2;
                             int steps = int(rayDist / stepSize);
-                            vec2 checkPos = worldHitPos.xy + rayDir * 0.1;
+                            vec2 checkPos = hitPos.xy + rayDir * 0.1;
                             bool hitWall = false;
                             
                             for(int s=0; s<64; s++) { 
                                 if (s >= steps) break;
                                 checkPos += rayDir * stepSize;
                                 
-                                vec2 scaledCheckPos = checkPos * VOXEL_SCALE;
-                                if (abs(floor(scaledCheckPos.x) - float(mapPos.x)) < 0.1 && abs(floor(scaledCheckPos.y) - float(mapPos.y)) < 0.1) continue;
+                                if (abs(floor(checkPos.x) - float(mapPos.x)) < 0.1 && abs(floor(checkPos.y) - float(mapPos.y)) < 0.1) continue;
 
-                                vec2 mapUV = (floor(scaledCheckPos) + 0.5) / u_map_size;
+                                vec2 mapUV = (floor(checkPos) + 0.5) / u_map_size;
                                 mapUV *= u_map_uv_scale;
                                 vec4 shadowMapPixel = texture2D(u_map_texture, mapUV);
                                 if (shadowMapPixel.r > 0.5) {
@@ -638,7 +633,6 @@ init 10 python:
         vec3 forwardRot = forwardUnrot * cp + cross(rightAxis, forwardUnrot) * sp + rightAxis * dot(rightAxis, forwardUnrot) * (1.0 - cp);
         
         float perpWallDist = dot(rayDir * rayDist, forwardRot);
-        perpWallDist /= VOXEL_SCALE;
         
         // If we didnt hit a wall (Sky/Void), the depth is infinite
         if (hit != 1) perpWallDist = 10000.0;
@@ -788,8 +782,7 @@ init 10 python:
                                             if (s >= steps) break;
                                             checkPos += rayDir * stepSize;
                                             
-                                            vec2 scaledCheckPos = checkPos * VOXEL_SCALE;
-                                            vec2 mapUV = (floor(scaledCheckPos) + 0.5) / u_map_size;
+                                            vec2 mapUV = (floor(checkPos) + 0.5) / u_map_size;
                                             mapUV *= u_map_uv_scale;
                                             vec4 smp = texture2D(u_map_texture, mapUV);
                                             if (smp.r > 0.5) {
@@ -1105,9 +1098,7 @@ init 10 python:
             self.fly_mode = False
 
         def get_ground_height_at(self, x, y, check_z=None):
-            vx = x * VOXEL_SCALE
-            vy = y * VOXEL_SCALE
-            if vx < 0 or vx >= self.wm.mapWidth or vy < 0 or vy >= self.wm.mapHeight: return 0.0
+            if x < 0 or x >= self.wm.mapWidth or y < 0 or y >= self.wm.mapHeight: return 0.0
             
             if check_z is None: check_z = self.z
             
@@ -1117,23 +1108,23 @@ init 10 python:
                 # Check all layers to find the highest ground
                 for layer, grid in self.wm.worldMap.items():
                     # Boundary check for this layer
-                    if int(vx) < len(grid) and int(vy) < len(grid[int(vx)]):
-                        tile = grid[int(vx)][int(vy)]
+                    if int(x) < len(grid) and int(y) < len(grid[int(x)]):
+                        tile = grid[int(x)][int(y)]
                         if tile > 0:
                             h = 1.0
                             if tile == 20: h = 0.5
-                            top_z = (float(layer) + h) / VOXEL_SCALE
+                            top_z = float(layer) + h
                             
                             # Only consider ground that is below or slightly above the check_z
                             # Allow stepping up 1.0 unit (e.g. stairs)
-                            if top_z <= check_z + (1.0 / VOXEL_SCALE):
+                            if top_z <= check_z + 1.0:
                                 if top_z > highest_z:
                                     highest_z = top_z
             else:
-                tile = self.wm.worldMap[int(vx)][int(vy)]
+                tile = self.wm.worldMap[int(x)][int(y)]
                 if tile == 0: return 0.0
-                if tile == 20: return 0.5 / VOXEL_SCALE
-                return 1.0 / VOXEL_SCALE
+                if tile == 20: return 0.5
+                return 1.0
                 
             return highest_z
 
@@ -1184,22 +1175,18 @@ init 10 python:
             if self.fly_mode: return
 
             # Right
-            if self.wm.isBlocking(self.x + radius, self.y, self.z):
-                vx = (self.x + radius) * VOXEL_SCALE
-                self.x = (math.floor(vx) / VOXEL_SCALE) - radius - 0.001
+            if self.wm.isBlocking(math.floor(self.x + radius), math.floor(self.y), self.z):
+                self.x = math.floor(self.x + radius) - radius - 0.001
             # Left
-            elif self.wm.isBlocking(self.x - radius, self.y, self.z):
-                vx = (self.x - radius) * VOXEL_SCALE
-                self.x = (math.floor(vx) / VOXEL_SCALE) + (1.0 / VOXEL_SCALE) + radius + 0.001
+            elif self.wm.isBlocking(math.floor(self.x - radius), math.floor(self.y), self.z):
+                self.x = math.floor(self.x - radius) + 1.0 + radius + 0.001
             
             # Down
-            if self.wm.isBlocking(self.x, self.y + radius, self.z):
-                vy = (self.y + radius) * VOXEL_SCALE
-                self.y = (math.floor(vy) / VOXEL_SCALE) - radius - 0.001
+            if self.wm.isBlocking(math.floor(self.x), math.floor(self.y + radius), self.z):
+                self.y = math.floor(self.y + radius) - radius - 0.001
             # Up
-            elif self.wm.isBlocking(self.x, self.y - radius, self.z):
-                vy = (self.y - radius) * VOXEL_SCALE
-                self.y = (math.floor(vy) / VOXEL_SCALE) + (1.0 / VOXEL_SCALE) + radius + 0.001
+            elif self.wm.isBlocking(math.floor(self.x), math.floor(self.y - radius), self.z):
+                self.y = math.floor(self.y - radius) + 1.0 + radius + 0.001
 
         def move(self, dt):
             self.update_physics(dt)
@@ -1267,7 +1254,7 @@ init 10 python:
         def update(self, dt):
             distance_to_travel = self.speed * dt
             
-            step_size = 0.4 / VOXEL_SCALE
+            step_size = 0.4
             dist_traveled = 0.0
 
             while dist_traveled < distance_to_travel:
@@ -1278,7 +1265,7 @@ init 10 python:
                 self.z += self.dir_z * step
                 dist_traveled += step
 
-                if self.wm.isBlocking(self.x, self.y, self.z): 
+                if self.wm.isBlocking(math.floor(self.x), math.floor(self.y), self.z): 
                     return False
                 
                 ground_h = self.wm.player.get_ground_height_at(self.x, self.y, check_z=self.z)
@@ -1412,10 +1399,8 @@ init 10 python:
             if not self.check_wall_collision(self.x, self.y + vy, radius): self.y += vy
 
         def has_line_of_sight(self, target_x, target_y):
-            ray_start_x, ray_start_y = self.x * VOXEL_SCALE, self.y * VOXEL_SCALE
-            target_x_v, target_y_v = target_x * VOXEL_SCALE, target_y * VOXEL_SCALE
-            
-            ray_dir_x = target_x_v - ray_start_x; ray_dir_y = target_y_v - ray_start_y
+            ray_start_x, ray_start_y = self.x, self.y
+            ray_dir_x = target_x - ray_start_x; ray_dir_y = target_y - ray_start_y
             ray_len = math.sqrt(ray_dir_x**2 + ray_dir_y**2)
             if ray_len == 0: return True
             ray_dir_x /= ray_len; ray_dir_y /= ray_len
@@ -1432,7 +1417,7 @@ init 10 python:
             while current_dist < ray_len:
                 if side_dist_x < side_dist_y: side_dist_x += delta_dist_x; map_x += step_x; current_dist = side_dist_x
                 else: side_dist_y += delta_dist_y; map_y += step_y; current_dist = side_dist_y
-                if self.wm.isVoxel(map_x, map_y, 0): return False
+                if self.wm.isBlocking(map_x, map_y): return False
             return True
 
     class Guard(BaseEnemy):
@@ -3017,37 +3002,33 @@ init 10 python:
             self.damage_indicators.append(DamageIndicator(angle))
 
         def isBlocking(self, x, y, z=0.0):
-            vx = x * VOXEL_SCALE
-            vy = y * VOXEL_SCALE
-            vz = z * VOXEL_SCALE
+            if x < 0 or x >= self.mapWidth or y < 0 or y >= self.mapHeight: return True
             
-            if vx < 0 or vx >= self.mapWidth or vy < 0 or vy >= self.mapHeight: return True
-            
-            layer = int(math.floor(vz))
+            layer = int(math.floor(z))
             tile = 0
             
             if isinstance(self.worldMap, dict):
                 if layer in self.worldMap:
                     grid = self.worldMap[layer]
-                    if int(vx) < len(grid) and int(vy) < len(grid[int(vx)]):
-                        tile = grid[int(vx)][int(vy)]
+                    if int(x) < len(grid) and int(y) < len(grid[int(x)]):
+                        tile = grid[int(x)][int(y)]
             else:
                 if layer == 0:
-                    tile = self.worldMap[int(vx)][int(vy)]
+                    tile = self.worldMap[int(x)][int(y)]
             
             if tile == 0: return False
             
             h = 1.0
             if tile == 20: h = 0.5
             
-            local_z = vz - float(layer)
+            local_z = z - float(layer)
             if local_z >= h: return False
             
             return True
 
         def checkCollision(self, fromX, fromY, toX, toY, radius, z=0.0):
             # Check center
-            if self.isBlocking(toX, toY, z):
+            if self.isBlocking(math.floor(toX), math.floor(toY), z):
                 return [fromX, fromY]
             
             # Check radius
@@ -3057,7 +3038,7 @@ init 10 python:
             ]
             
             for px, py in points:
-                if self.isBlocking(px, py, z):
+                if self.isBlocking(math.floor(px), math.floor(py), z):
                     return [fromX, fromY]
             
             return [toX, toY]
@@ -3080,11 +3061,6 @@ init 10 python:
             return tile > 0
 
         def cast_ray(self, start_x, start_y, start_z, dir_x, dir_y, dir_z, max_dist=10.0):
-            start_x *= VOXEL_SCALE
-            start_y *= VOXEL_SCALE
-            start_z *= VOXEL_SCALE
-            max_dist *= VOXEL_SCALE
-            
             map_x = int(math.floor(start_x))
             map_y = int(math.floor(start_y))
             map_z = int(math.floor(start_z))
@@ -3215,37 +3191,37 @@ init 10 python:
                         for _ in range(off_y):
                             col.insert(0, 0)
             
-            self.player.x += off_x / VOXEL_SCALE
-            self.player.y += off_y / VOXEL_SCALE
+            self.player.x += off_x
+            self.player.y += off_y
             
             for e in self.enemies:
-                e.x += off_x / VOXEL_SCALE
-                e.y += off_y / VOXEL_SCALE
-                if hasattr(e, 'last_known_x') and e.last_known_x is not None: e.last_known_x += off_x / VOXEL_SCALE
-                if hasattr(e, 'last_known_y') and e.last_known_y is not None: e.last_known_y += off_y / VOXEL_SCALE
+                e.x += off_x
+                e.y += off_y
+                if hasattr(e, 'last_known_x') and e.last_known_x is not None: e.last_known_x += off_x
+                if hasattr(e, 'last_known_y') and e.last_known_y is not None: e.last_known_y += off_y
             
             for p in self.projectiles:
-                p.x += off_x / VOXEL_SCALE
-                p.y += off_y / VOXEL_SCALE
+                p.x += off_x
+                p.y += off_y
             
             new_sprites = []
             for s in self.sprite_positions:
                 l = list(s)
-                l[0] += off_x / VOXEL_SCALE
-                l[1] += off_y / VOXEL_SCALE
+                l[0] += off_x
+                l[1] += off_y
                 new_sprites.append(tuple(l))
             self.sprite_positions = new_sprites
             
             new_spawns = []
             for s in self.spawn_points:
-                new_spawns.append((s[0] + off_x / VOXEL_SCALE, s[1] + off_y / VOXEL_SCALE))
+                new_spawns.append((s[0] + off_x, s[1] + off_y))
             self.spawn_points = new_spawns
             
             new_exits = []
             for e in self.exits:
                 l = list(e)
-                l[0] += off_x / VOXEL_SCALE
-                l[1] += off_y / VOXEL_SCALE
+                l[0] += off_x
+                l[1] += off_y
                 new_exits.append(tuple(l))
             self.exits = new_exits
             
