@@ -248,6 +248,56 @@ init python:
         ]
     }
 
+    # --- Level 5 Data ---
+    # A test fo multiple z levels
+    level5_data = {
+        "lighting": "day",
+        "worldMap": {
+            0: [
+                [1,1,1,1,1,1,1,1,1,1],
+                [1,0,0,0,0,0,0,0,0,1],
+                [1,0,0,0,0,0,0,0,0,1],
+                [1,0,0,0,0,0,0,0,0,1],
+                [1,0,0,2,2,2,0,0,0,1],
+                [1,0,0,2,2,2,0,0,0,1],
+                [1,0,0,2,2,2,0,0,0,1],
+                [1,0,0,0,0,0,0,0,0,1],
+                [1,0,0,0,0,0,0,0,0,1],
+                [1,1,1,1,1,1,1,1,1,1]
+            ],
+            1: [
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,3,0,3,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,3,0,3,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0]
+            ],
+            2: [
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,4,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0]
+            ]
+        },
+        "player_x": 1.5, "player_y": 1.5,
+        "player_dirx": 0.0, "player_diry": 1.0,
+        "player_planex": 0.66, "player_planey": 0.0,
+        "enemies": [],
+        "sprites": [],
+        "exits": []
+    }
+
     def reset_stein_state(level=1, arena=False):
         """
         Initializes or resets the game state for a specific level.
@@ -258,6 +308,8 @@ init python:
             level_data = level3_data
         elif level == 4:
             level_data = level4_data
+        elif level == 5:
+            level_data = level5_data
         else: # Default to level 1
             level_data = level1_data
 
@@ -389,6 +441,11 @@ label start_level_4_arena:
     call screen shader_warmup
     $ js_stein_audio.play("arena")
     $ reset_stein_state(level=4, arena=True)
+    jump renpystein_game
+
+label start_level_5:
+    call screen shader_warmup
+    $ reset_stein_state(level=5)
     jump renpystein_game
 
 # This is for backwards compatibility / direct calls

@@ -63,6 +63,10 @@ init 10 python:
         uniform sampler2D u_map_texture;
         uniform vec2 u_map_size;
         uniform vec2 u_map_uv_scale; 
+        uniform float u_map_layer_norm_height;
+        uniform float u_map_layer_base_y;
+        uniform float u_map_layer_count;
+        uniform vec2 u_map_tex_pixel_size;
         uniform sampler2D u_wall_atlas; 
         uniform sampler2D u_floor_texture;
         uniform float u_num_textures;
@@ -274,10 +278,16 @@ init 10 python:
                 hit = 2; break; // Hit Sky
             }
             
-            // Voxel Check (Only Z=0 has blocks yet)
-            if (mapPos.z == 0) {
-                vec2 mapUV = (vec2(mapPos.x, mapPos.y) + 0.5) / u_map_size;
-                mapUV = mapUV * u_map_uv_scale;
+            // Voxel Check
+            int layer = int(mapPos.z);
+            int layer_idx = layer - int(u_map_layer_base_y);
+            
+            if (layer_idx >= 0 && layer_idx < int(u_map_layer_count)) {
+                float u = (float(mapPos.x) + 0.5) * u_map_tex_pixel_size.x;
+                float v_base = float(layer_idx) * u_map_layer_norm_height;
+                float v_local = (float(mapPos.y) + 0.5) * u_map_tex_pixel_size.y;
+                
+                vec2 mapUV = vec2(u, v_base + v_local);
                 vec4 mapPixel = texture2D(u_map_texture, mapUV);
                 if (mapPixel.r > 0.5) {
                     int id = int(mapPixel.g * 255.0 + 0.5);
@@ -1082,12 +1092,36 @@ init 10 python:
             self.is_grounded = True; self.is_crouching = False
             self.crouch_timer = 0.0; self.crouch_duration = 0.06
 
-        def get_ground_height_at(self, x, y):
+        def get_ground_height_at(self, x, y, check_z=None):
             if x < 0 or x >= self.wm.mapWidth or y < 0 or y >= self.wm.mapHeight: return 0.0
-            tile = self.wm.worldMap[int(x)][int(y)]
-            if tile == 0: return 0.0
-            if tile == 20: return 0.5
-            return 1.0
+            
+            if check_z is None: check_z = self.z
+            
+            highest_z = 0.0
+            
+            if isinstance(self.wm.worldMap, dict):
+                # Check all layers to find the highest ground
+                for layer, grid in self.wm.worldMap.items():
+                    # Boundary check for this layer
+                    if int(x) < len(grid) and int(y) < len(grid[int(x)]):
+                        tile = grid[int(x)][int(y)]
+                        if tile > 0:
+                            h = 1.0
+                            if tile == 20: h = 0.5
+                            top_z = float(layer) + h
+                            
+                            # Only consider ground that is below or slightly above the check_z
+                            # Allow stepping up 1.0 unit (e.g. stairs)
+                            if top_z <= check_z + 1.0:
+                                if top_z > highest_z:
+                                    highest_z = top_z
+            else:
+                tile = self.wm.worldMap[int(x)][int(y)]
+                if tile == 0: return 0.0
+                if tile == 20: return 0.5
+                return 1.0
+                
+            return highest_z
 
         def trigger_jump(self):
             if self.is_grounded and not self.is_crouching:
@@ -1180,7 +1214,7 @@ init 10 python:
                 self.dir_z = (pitch / float(self.wm.height))
             else:
                 self.speed = 12.0
-                ground_h = self.wm.player.get_ground_height_at(x, y)
+                ground_h = self.wm.player.get_ground_height_at(x, y, check_z=self.wm.player.z)
                 self.z = ground_h + 0.5
                 
                 p_x = self.wm.player.x
@@ -1210,7 +1244,7 @@ init 10 python:
                 if self.wm.isBlocking(math.floor(self.x), math.floor(self.y), self.z): 
                     return False
                 
-                ground_h = self.wm.player.get_ground_height_at(self.x, self.y)
+                ground_h = self.wm.player.get_ground_height_at(self.x, self.y, check_z=self.z)
                 if self.z < ground_h:
                     return False
 
@@ -1227,7 +1261,9 @@ init 10 python:
                 else:
                     for enemy in list(self.wm.enemies):
                         if math.sqrt((enemy.x - self.x)**2 + (enemy.y - self.y)**2) < 0.5:
-                            e_ground = self.wm.player.get_ground_height_at(enemy.x, enemy.y)
+                            e_ground = self.wm.player.get_ground_height_at(enemy.x, enemy.y, check_z=enemy.y) # Enemy doesnt have Z, assume ground
+                            e_ground = self.wm.player.get_ground_height_at(enemy.x, enemy.y, check_z=self.z) 
+                            
                             if self.z >= e_ground and self.z <= e_ground + 0.9:
                                 if hasattr(self, 'pitch'):
                                     pass
@@ -1957,6 +1993,10 @@ init 10 python:
             child_render.add_uniform('u_map_size', (float(c.map_w), float(c.map_h)))
             child_render.add_uniform('u_map_uv_scale', c.map_uv_scale)
             child_render.add_uniform('u_map_texture', c.map_texture)
+            child_render.add_uniform('u_map_layer_norm_height', c.map_layer_norm_height)
+            child_render.add_uniform('u_map_layer_base_y', float(c.min_layer))
+            child_render.add_uniform('u_map_layer_count', float(c.num_layers))
+            child_render.add_uniform('u_map_tex_pixel_size', c.map_tex_pixel_size)
             
             child_render.add_uniform('u_wall_atlas', c.wall_atlas)
             child_render.add_uniform('u_floor_texture', c.floor_texture)
@@ -2009,8 +2049,19 @@ init 10 python:
             self.height = height
             self.map_data = worldMap
             self.worldMap = worldMap 
-            self.mapWidth = len(worldMap)
-            self.mapHeight = len(worldMap[0]) if self.mapWidth > 0 else 0
+            
+            if isinstance(worldMap, dict):
+                max_x = 0
+                max_y = 0
+                for grid in worldMap.values():
+                    if len(grid) > max_x: max_x = len(grid)
+                    if len(grid) > 0 and len(grid[0]) > max_y: max_y = len(grid[0])
+                self.mapWidth = max_x
+                self.mapHeight = max_y
+            else:
+                self.mapWidth = len(worldMap)
+                self.mapHeight = len(worldMap[0]) if self.mapWidth > 0 else 0
+            
             self.map_w = self.mapWidth
             self.map_h = self.mapHeight
             
@@ -2443,23 +2494,54 @@ init 10 python:
                 if n == 0: return 1
                 return 2**math.ceil(math.log(n, 2))
             
-            x_len = len(self.map_data)
-            y_len = len(self.map_data[0]) if x_len > 0 else 0
-            w_pot = max(64, next_power_of_two(x_len))
-            h_pot = max(64, next_power_of_two(y_len))
+            if isinstance(self.map_data, list):
+                layers = {0: self.map_data}
+            else:
+                layers = self.map_data
+
+            # Find max dimensions
+            max_x = 0
+            max_y = 0
+            min_z = 0
+            max_z = 0
+            
+            if layers:
+                min_z = min(layers.keys())
+                max_z = max(layers.keys())
+                for z, grid in layers.items():
+                    if len(grid) > max_x: max_x = len(grid)
+                    if len(grid) > 0 and len(grid[0]) > max_y: max_y = len(grid[0])
+            
+            self.map_w = max_x
+            self.map_h = max_y
+            self.min_layer = min_z
+            self.max_layer = max_z
+            self.num_layers = max_z - min_z + 1
+            
+            layer_h_pixels = next_power_of_two(max_y)
+            w_pot = max(64, next_power_of_two(max_x))
+            h_pot = max(64, next_power_of_two(layer_h_pixels * self.num_layers))
 
             surf = pygame.Surface((w_pot, h_pot), flags=pygame.SRCALPHA, depth=32)
             surf.fill((0,0,0,255))
             
-            for map_x, row in enumerate(self.map_data):
-                for map_y, tile in enumerate(row):
-                    if tile > 0:
-                        surf.set_at((map_x, map_y), (255, tile, 0, 255))
-                    else:
-                        surf.set_at((map_x, map_y), (0, 0, 0, 255))
+            for z, grid in layers.items():
+                layer_idx = z - min_z
+                base_y = layer_idx * layer_h_pixels
+                
+                for map_x, row in enumerate(grid):
+                    for map_y, tile in enumerate(row):
+                        if tile > 0:
+                            surf.set_at((map_x, base_y + map_y), (255, tile, 0, 255))
             
             tex = renpy.display.draw.load_texture(surf)
-            self.map_uv_scale = (float(x_len) / float(w_pot), float(y_len) / float(h_pot))
+            
+            # Calculate uniforms
+            self.map_layer_norm_height = float(layer_h_pixels) / float(h_pot)
+            self.map_tex_pixel_size = (1.0 / float(w_pot), 1.0 / float(h_pot))
+            
+            self.map_uv_scale = (float(max_x) / float(w_pot), float(max_y) / float(layer_h_pixels)) 
+            
             return tex
 
         def render(self, width, height, st, at):
@@ -2827,7 +2909,7 @@ init 10 python:
                 for e in list(self.enemies):
                     dist = math.sqrt((e.x - self.player.x)**2 + (e.y - self.player.y)**2)
                     if dist < 1.5: 
-                        e_ground = self.player.get_ground_height_at(e.x, e.y)
+                        e_ground = self.player.get_ground_height_at(e.x, e.y, check_z=self.player.z)
                         if abs(self.player.z - e_ground) < 1.0:
                             taken = True
                             if hasattr(e, 'take_damage'):
@@ -2876,13 +2958,27 @@ init 10 python:
 
         def isBlocking(self, x, y, z=0.0):
             if x < 0 or x >= self.mapWidth or y < 0 or y >= self.mapHeight: return True
-            tile = self.worldMap[int(x)][int(y)]
+            
+            layer = int(math.floor(z))
+            tile = 0
+            
+            if isinstance(self.worldMap, dict):
+                if layer in self.worldMap:
+                    grid = self.worldMap[layer]
+                    if int(x) < len(grid) and int(y) < len(grid[int(x)]):
+                        tile = grid[int(x)][int(y)]
+            else:
+                if layer == 0:
+                    tile = self.worldMap[int(x)][int(y)]
+            
             if tile == 0: return False
             
             h = 1.0
             if tile == 20: h = 0.5
             
-            if z >= h: return False
+            local_z = z - float(layer)
+            if local_z >= h: return False
+            
             return True
 
         def checkCollision(self, fromX, fromY, toX, toY, radius, z=0.0):
