@@ -39,7 +39,51 @@
 # Left=B13
 # Right=B14
 
-init 10 python:
+init -10 python:
+    import sys
+    import os
+
+    core_path = os.path.join(config.gamedir, "core")
+    if core_path not in sys.path:
+        sys.path.append(core_path)
+
+    try:
+        import stein_core
+    except ImportError as e:
+        raise ImportError("Please compile stein_core.pyd. Details: " + str(e))
+
+    import array
+
+    def flatten_world_map(world_map, width, height, min_layer, max_layer):
+        num_layers = max_layer - min_layer + 1
+        total_size = width * height * num_layers
+        
+        flat = array.array('i', [0] * total_size)
+        
+        if isinstance(world_map, dict):
+            for z, grid in world_map.items():
+                layer_idx = z - min_layer
+                if layer_idx < 0 or layer_idx >= num_layers: continue
+                
+                base_idx = layer_idx * width * height
+                for x in range(min(len(grid), width)):
+                    row = grid[x]
+                    for y in range(min(len(row), height)):
+                        if row[y] > 0:
+                            flat[base_idx + (x * height) + y] = row[y]
+                            
+        elif isinstance(world_map, list):
+            layer_idx = 0 - min_layer
+            if 0 <= layer_idx < num_layers:
+                base_idx = layer_idx * width * height
+                for x in range(min(len(world_map), width)):
+                    row = world_map[x]
+                    for y in range(min(len(row), height)):
+                        if row[y] > 0:
+                            flat[base_idx + (x * height) + y] = row[y]
+
+        return flat
+
     SLOT_MELEE   = 0
     SLOT_HANDGUN = 1
     SLOT_LONG    = 2
@@ -1116,8 +1160,7 @@ init 10 python:
                             top_z = float(layer) + h
                             
                             # Only consider ground that is below or slightly above the check_z
-                            # Allow stepping up 1.0 unit (e.g. stairs)
-                            if top_z <= check_z + 1.0:
+                            if top_z <= check_z + 0.5:
                                 if top_z > highest_z:
                                     highest_z = top_z
             else:
@@ -1190,7 +1233,6 @@ init 10 python:
 
         def move(self, dt):
             self.update_physics(dt)
-            self.resolve_wall_collision(0.3)
 
             moveStep = self.speed * self.moveSpeed * dt
             strafeStep = self.strafe_speed * self.moveSpeed * dt
@@ -1206,15 +1248,16 @@ init 10 python:
                 self.x += vx
                 self.y += vy
             else:
-                # Move X
-                newX = self.x + vx
-                pos = self.wm.checkCollision(self.x, self.y, newX, self.y, 0.3, self.z)
-                self.x = pos[0]
-                
-                # Move Y
-                newY = self.y + vy
-                pos = self.wm.checkCollision(self.x, self.y, self.x, newY, 0.3, self.z)
-                self.y = pos[1]
+                new_pos = stein_core.resolve_movement(
+                    self.x, self.y, self.z,
+                    vx, vy,
+                    0.3,
+                    self.wm.flat_map_buffer,
+                    self.wm.mapWidth, self.wm.mapHeight,
+                    self.wm.num_layers, self.wm.min_layer
+                )
+                self.x = new_pos[0]
+                self.y = new_pos[1]
 
             self.dirx = math.cos(self.rot); self.diry = math.sin(self.rot)
             self.planex = math.cos(self.planerot); self.planey = math.sin(self.planerot)
@@ -2556,6 +2599,11 @@ init 10 python:
             self.min_layer = min_z
             self.max_layer = max_z
             self.num_layers = max_z - min_z + 1
+
+            self.flat_map_buffer = flatten_world_map(
+                self.worldMap, self.mapWidth, self.mapHeight, 
+                self.min_layer, self.max_layer
+            )
             
             layer_h_pixels = next_power_of_two(max_y)
             w_pot = max(64, next_power_of_two(max_x))
@@ -3061,61 +3109,14 @@ init 10 python:
             return tile > 0
 
         def cast_ray(self, start_x, start_y, start_z, dir_x, dir_y, dir_z, max_dist=10.0):
-            map_x = int(math.floor(start_x))
-            map_y = int(math.floor(start_y))
-            map_z = int(math.floor(start_z))
-
-            delta_dist_x = abs(1.0 / dir_x) if dir_x != 0 else 1e30
-            delta_dist_y = abs(1.0 / dir_y) if dir_y != 0 else 1e30
-            delta_dist_z = abs(1.0 / dir_z) if dir_z != 0 else 1e30
-
-            step_x = 1 if dir_x > 0 else -1
-            step_y = 1 if dir_y > 0 else -1
-            step_z = 1 if dir_z > 0 else -1
-
-            side_dist_x = (map_x + 1.0 - start_x) * delta_dist_x if dir_x > 0 else (start_x - map_x) * delta_dist_x
-            side_dist_y = (map_y + 1.0 - start_y) * delta_dist_y if dir_y > 0 else (start_y - map_y) * delta_dist_y
-            side_dist_z = (map_z + 1.0 - start_z) * delta_dist_z if dir_z > 0 else (start_z - map_z) * delta_dist_z
-
-            hit = False
-            side = 0 
-            dist = 0.0
-            
-            while dist < max_dist:
-                if side_dist_x < side_dist_y:
-                    if side_dist_x < side_dist_z:
-                        dist = side_dist_x
-                        side_dist_x += delta_dist_x
-                        map_x += step_x
-                        side = 0
-                    else:
-                        dist = side_dist_z
-                        side_dist_z += delta_dist_z
-                        map_z += step_z
-                        side = 2
-                else:
-                    if side_dist_y < side_dist_z:
-                        dist = side_dist_y
-                        side_dist_y += delta_dist_y
-                        map_y += step_y
-                        side = 1
-                    else:
-                        dist = side_dist_z
-                        side_dist_z += delta_dist_z
-                        map_z += step_z
-                        side = 2
-                
-                if self.isVoxel(map_x, map_y, map_z):
-                    hit = True
-                    break
-                
-                if map_z == -1:
-                    hit = True
-                    break
-            
-            if hit:
-                return (True, map_x, map_y, map_z, side, step_x, step_y, step_z)
-            return (False, 0, 0, 0, 0, 0, 0, 0)
+            # Call to cpp
+            return stein_core.cast_ray_fast(
+                start_x, start_y, start_z, 
+                dir_x, dir_y, dir_z, 
+                self.flat_map_buffer, 
+                self.mapWidth, self.mapHeight, self.num_layers, self.min_layer,
+                max_dist
+            )
 
         def handle_builder_action(self, action):
             u_pitch = self.player.pitch / float(self.height)
@@ -3265,6 +3266,12 @@ init 10 python:
             if 0 <= x < len(grid) and 0 <= y < len(grid[0]):
                 grid[x][y] = val
                 map_changed = True
+
+                if 0 <= x < self.mapWidth and 0 <= y < self.mapHeight:
+                    layer_idx = z - self.min_layer
+                    if 0 <= layer_idx < self.num_layers:
+                        idx = (layer_idx * self.mapWidth * self.mapHeight) + (x * self.mapHeight) + y
+                        self.flat_map_buffer[idx] = val
                 
             if map_changed:
                 self.map_texture = self.create_map_texture()

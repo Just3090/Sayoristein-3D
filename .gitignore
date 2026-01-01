@@ -28,3 +28,8 @@
 .vscode/
 **.keystore
 android.json
+
+build/
+
+**.c
+**_core.pyd
