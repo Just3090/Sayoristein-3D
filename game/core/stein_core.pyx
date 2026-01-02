@@ -4,6 +4,66 @@
 # cython: cdivision=True
 # cython: initializedcheck=False
 
+"""
+Module: stein_core
+==================
+
+Description:
+    High-performance, native Raycasting and Voxel rendering engine designed for RenPy.
+    This module handles computationally intensive tasks (DDA algorithm, collision detection)
+    outside the Python interpreter to ensure stable 60+ FPS on mobile and desktop platforms.
+
+Architecture: "Standalone Shared Library" Pattern
+-------------------------------------------------
+    Unlike traditional Python Extensions (.pyd/.so linked against libpython), this module is 
+    compiled as a standalone C shared library. It does not initialize a Python module structure 
+    (PyModuleDef) nor interacts with the Python C-API during execution.
+
+    Integration is achieved via Python's 'ctypes' foreign function interface (FFI), treating 
+    this module strictly as a dynamic binary library (DLL/Shared Object).
+
+Design Rationale:
+    1. Android/RAPT Compatibility:
+       RenPy on Android uses a highly customized Python environment. Standard Cython modules 
+       often trigger SIGSEGV errors (in 'sem_wait' / 'PyThread_acquire_lock') due to Global 
+       Interpreter Lock (GIL) state mismatches during module initialization.
+       By bypassing 'PyInit' and the Python C-API entirely, we eliminate ABI conflicts.
+
+    2. Cross-Platform ABI:
+       This architecture allows the same rendering logic to be compiled with MSVC (Windows) 
+       and CMake/NDK (Android) without version-specific dependencies (e.g., python3.10 vs 3.12),
+       as the interface relies solely on C primitives.
+
+Implementation Guidelines:
+--------------------------
+    * Type Safety: Public functions ('cdef public') must exclusively use standard C types 
+      ('int', 'ouble', 'void'). Usage of Python objects ('PyObject*', 'list', 'tuple') or 
+      Cython MemoryViews in the public interface is strictly prohibited to prevent GIL acquisition.
+
+    * Memory Addressing: All memory pointers passed from Python must be typed as 'size_t'
+      (defined in 'libc.stddef'). Do not use 'long' or 'int' for pointers, as this causes 
+      heap corruption on LLP64 architectures (specifically Windows x64).
+
+    * Data Output: Functions should return 'void' or primitive scalars. Complex data 
+      structures must be populated via pointer arguments (pass-by-reference buffers) pre-allocated 
+      by the host Python application.
+
+Build Instructions:
+-------------------
+    1. Source Generation:
+       $ python -m cython -3 stein_core.pyx -o stein_core.c
+
+    2. Compilation (Windows - MSVC):
+       Requires 'stein_core.def' for explicit symbol export.
+       $ cl /LD /O2 /Tc stein_core.c /I "PATH_TO_INCLUDE" /link /LIBPATH:"PATH_TO_LIBS" /DEF:stein_core.def
+
+    3. Compilation (Android - CMake):
+       Target as a standard shared library. Do not link against 'libpython'. 
+       Use flag: `-Wl,` (if necessary).
+    
+    You can see an example in game/core/notes.txt
+"""
+
 from libc.math cimport floor, abs, sqrt
 from libc.stddef cimport size_t
 
