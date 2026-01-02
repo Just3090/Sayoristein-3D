@@ -39,9 +39,91 @@
 # Left=B13
 # Right=B14
 
+init -50 python:
+    import ctypes
+    import sys
+    import os
+
+    class RayResult(ctypes.Structure):
+        _fields_ = [
+            ("hit", ctypes.c_int),
+            ("map_x", ctypes.c_int), ("map_y", ctypes.c_int), ("map_z", ctypes.c_int),
+            ("side", ctypes.c_int),
+            ("step_x", ctypes.c_int), ("step_y", ctypes.c_int), ("step_z", ctypes.c_int)
+        ]
+
+    class MoveResult(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+    class SteinWrapper:
+        ray_out_array = (ctypes.c_int * 8)()
+        ray_out_ptr = ctypes.addressof(ray_out_array)
+        
+        move_out_array = (ctypes.c_double * 2)()
+        move_out_ptr = ctypes.addressof(move_out_array)
+
+        @staticmethod
+        def cast_ray_fast(*args):
+            stein_lib.cast_ray_c(*args, SteinWrapper.ray_out_ptr)
+            if SteinWrapper.ray_out_array[0]:
+                return (True, *SteinWrapper.ray_out_array[1:])
+            return (False, 0, 0, 0, 0, 0, 0, 0)
+
+        @staticmethod
+        def resolve_movement(*args):
+            stein_lib.resolve_movement_c(*args, SteinWrapper.move_out_ptr)
+            return (SteinWrapper.move_out_array[0], SteinWrapper.move_out_array[1])
+
+    stein_lib = None
+    library_path = None
+    USING_CYTHON = False
+
+    try:
+        if renpy.android:
+            library_path = "libstein_core.so"
+        
+        elif renpy.windows:
+            library_path = os.path.join(config.gamedir, "core", "stein_core.dll")
+            if not os.path.exists(library_path):
+                library_path = os.path.join(config.gamedir, "stein_core.dll")
+
+        elif renpy.linux:
+            library_path = os.path.join(config.gamedir, "core", "stein_core.so")
+
+        if library_path:
+            stein_lib = ctypes.CDLL(library_path)
+            
+            stein_lib.cast_ray_c.argtypes = [
+                ctypes.c_double, ctypes.c_double, ctypes.c_double,
+                ctypes.c_double, ctypes.c_double, ctypes.c_double,
+                ctypes.c_void_p,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                ctypes.c_double,
+                ctypes.c_void_p
+            ]
+            stein_lib.cast_ray_c.restype = None
+
+            stein_lib.resolve_movement_c.argtypes = [
+                ctypes.c_double, ctypes.c_double, ctypes.c_double,
+                ctypes.c_double, ctypes.c_double, ctypes.c_double,
+                ctypes.c_void_p,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                ctypes.c_void_p
+            ]
+            stein_lib.resolve_movement_c.restype = None
+            
+            sys.modules["stein_core"] = SteinWrapper
+            print(f"Sayoristein: Native motor loaded in {library_path}")
+            USING_CYTHON = True
+
+    except Exception as e:
+        print(f"Sayoristein Error Loading Library: {e}")
+
 init -10 python:
     import sys
     import os
+    import ctypes
+    import array
 
     core_path = os.path.join(config.gamedir, "core")
     if core_path not in sys.path:
@@ -49,10 +131,10 @@ init -10 python:
 
     try:
         import stein_core
-    except ImportError as e:
-        raise ImportError("Please compile stein_core.pyd. Details: " + str(e))
+    except ImportError:
+        if not USING_CYTHON:
+            raise ImportError("ERROR: stein_core lib is not loaded.")
 
-    import array
 
     def flatten_world_map(world_map, width, height, min_layer, max_layer):
         num_layers = max_layer - min_layer + 1
@@ -1248,11 +1330,13 @@ init -10 python:
                 self.x += vx
                 self.y += vy
             else:
+                map_address, _ = self.wm.flat_map_buffer.buffer_info()
+                
                 new_pos = stein_core.resolve_movement(
                     self.x, self.y, self.z,
                     vx, vy,
                     0.3,
-                    self.wm.flat_map_buffer,
+                    map_address,
                     self.wm.mapWidth, self.wm.mapHeight,
                     self.wm.num_layers, self.wm.min_layer
                 )
@@ -3109,11 +3193,13 @@ init -10 python:
             return tile > 0
 
         def cast_ray(self, start_x, start_y, start_z, dir_x, dir_y, dir_z, max_dist=10.0):
+            map_address, _ = self.flat_map_buffer.buffer_info()
+            
             # Call to cpp
             return stein_core.cast_ray_fast(
                 start_x, start_y, start_z, 
                 dir_x, dir_y, dir_z, 
-                self.flat_map_buffer, 
+                map_address, 
                 self.mapWidth, self.mapHeight, self.num_layers, self.min_layer,
                 max_dist
             )
