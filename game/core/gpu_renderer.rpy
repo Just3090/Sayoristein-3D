@@ -2125,15 +2125,47 @@ init -10 python:
             renderer.add_uniform('u_wetness', getattr(c, 'wetness', 0.0))
             
             current_hour = 0.0
+            current_ambient = c.lighting_preset['ambient_base']
+            current_ambient_near = c.lighting_preset['ambient_near']
+
             if c.is_arena_mode:
                 elapsed_hours = st * 0.04
                 current_hour = (c.arena_start_hour + elapsed_hours) % 24.0
+                
+                def lerp_col(c1, c2, t):
+                    return (
+                        c1[0] + (c2[0] - c1[0]) * t,
+                        c1[1] + (c2[1] - c1[1]) * t,
+                        c1[2] + (c2[2] - c1[2]) * t
+                    )
+
+                night_amb = (0.05, 0.05, 0.1)
+                day_amb = (1.0, 1.0, 1.0)
+                sunset_amb = (0.7, 0.6, 0.5)
+
+                if current_hour < 5.0:
+                    current_ambient = night_amb
+                elif current_hour < 8.0:
+                    p = (current_hour - 5.0) / 3.0
+                    current_ambient = lerp_col(night_amb, day_amb, p)
+                elif current_hour < 16.0:
+                    current_ambient = day_amb
+                elif current_hour < 19.0:
+                    p = (current_hour - 16.0) / 3.0
+                    current_ambient = lerp_col(day_amb, sunset_amb, p)
+                elif current_hour < 21.0:
+                    p = (current_hour - 19.0) / 2.0
+                    current_ambient = lerp_col(sunset_amb, night_amb, p)
+                else:
+                    current_ambient = night_amb
+                
+                current_ambient_near = (0.0, 0.0, 0.0)
             else:
                 current_hour = float(c.lighting_preset.get('time_id', 0.0))
             renderer.add_uniform('u_time_of_day', current_hour)
 
-            renderer.add_uniform('u_ambient_color', c.lighting_preset['ambient_base'])
-            renderer.add_uniform('u_ambient_near_color', c.lighting_preset['ambient_near'])
+            renderer.add_uniform('u_ambient_color', current_ambient)
+            renderer.add_uniform('u_ambient_near_color', current_ambient_near)
 
             renderer.add_uniform('u_map_size', (float(c.map_w), float(c.map_h)))
             renderer.add_uniform('u_map_uv_scale', c.map_uv_scale)
