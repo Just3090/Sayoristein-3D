@@ -257,3 +257,35 @@ cdef public int check_line_of_sight_c(
             return 0 
 
     return 1
+
+cdef public double get_map_height_c(
+    double x, double y, double check_z,
+    size_t flat_map_addr,
+    int w, int h, int layers, int min_layer
+):
+    cdef int* flat_map = <int*>flat_map_addr
+    cdef int ix = <int>floor(x)
+    cdef int iy = <int>floor(y)
+    
+    if ix < 0 or ix >= w or iy < 0 or iy >= h:
+        return 0.0
+        
+    cdef double max_z = 0.0
+    cdef int l, idx, tile
+    cdef double top_z
+    cdef double block_height
+    
+    for l in range(layers):
+        idx = (l * w * h) + (ix * h) + iy
+        tile = flat_map[idx]
+        
+        if tile > 0:
+            block_height = 0.5 if tile == 20 else 1.0
+            
+            top_z = (min_layer + l) + block_height
+            
+            if top_z <= (check_z + 0.5):
+                if top_z > max_z:
+                    max_z = top_z
+                    
+    return max_z

@@ -3,3 +3,4 @@ EXPORTS
 cast_ray_c
 resolve_movement_c
 check_line_of_sight_c
+get_map_height_c

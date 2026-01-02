@@ -70,6 +70,13 @@ init -50 python:
             return result == 1
 
         @staticmethod
+        def get_map_height(x, y, check_z, map_addr, w, h, layers, min_layer):
+            return stein_lib.get_map_height_c(
+                x, y, check_z, 
+                map_addr, w, h, layers, min_layer
+            )
+
+        @staticmethod
         def cast_ray_fast(*args):
             stein_lib.cast_ray_c(*args, SteinWrapper.ray_out_ptr)
             if SteinWrapper.ray_out_array[0]:
@@ -126,6 +133,14 @@ init -50 python:
                 ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int # Map Data
             ]
             stein_lib.check_line_of_sight_c.restype = ctypes.c_int
+
+            stein_lib.get_map_height_c.argtypes = [
+                ctypes.c_double, ctypes.c_double, ctypes.c_double, # x, y, check_z
+                ctypes.c_void_p,                                   # map_ptr
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int # w, h, layers, min
+            ]
+            stein_lib.get_map_height_c.restype = ctypes.c_double
+
             sys.modules["stein_core"] = SteinWrapper
             print(f"Sayoristein: Native motor loaded in {library_path}")
             USING_CYTHON = True
@@ -1238,34 +1253,16 @@ init -10 python:
             self.fly_mode = False
 
         def get_ground_height_at(self, x, y, check_z=None):
-            if x < 0 or x >= self.wm.mapWidth or y < 0 or y >= self.wm.mapHeight: return 0.0
-            
             if check_z is None: check_z = self.z
             
-            highest_z = 0.0
+            map_address, _ = self.wm.flat_map_buffer.buffer_info()
             
-            if isinstance(self.wm.worldMap, dict):
-                # Check all layers to find the highest ground
-                for layer, grid in self.wm.worldMap.items():
-                    # Boundary check for this layer
-                    if int(x) < len(grid) and int(y) < len(grid[int(x)]):
-                        tile = grid[int(x)][int(y)]
-                        if tile > 0:
-                            h = 1.0
-                            if tile == 20: h = 0.5
-                            top_z = float(layer) + h
-                            
-                            # Only consider ground that is below or slightly above the check_z
-                            if top_z <= check_z + 0.5:
-                                if top_z > highest_z:
-                                    highest_z = top_z
-            else:
-                tile = self.wm.worldMap[int(x)][int(y)]
-                if tile == 0: return 0.0
-                if tile == 20: return 0.5
-                return 1.0
-                
-            return highest_z
+            return stein_core.get_map_height(
+                x, y, check_z,
+                map_address,
+                self.wm.mapWidth, self.wm.mapHeight,
+                self.wm.num_layers, self.wm.min_layer
+            )
 
         def trigger_jump(self):
             if self.is_grounded and not self.is_crouching:
