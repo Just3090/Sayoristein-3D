@@ -55,12 +55,32 @@ init -50 python:
     class MoveResult(ctypes.Structure):
         _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
 
+    class ProjectileData(ctypes.Structure):
+        _fields_ = [
+            ("x", ctypes.c_double), ("y", ctypes.c_double), ("z", ctypes.c_double),
+            ("dir_x", ctypes.c_double), ("dir_y", ctypes.c_double), ("dir_z", ctypes.c_double),
+            ("speed", ctypes.c_double),
+            ("active", ctypes.c_int),      # 1/0
+            ("texture_idx", ctypes.c_int),
+            ("pitch", ctypes.c_double),
+            ("damage", ctypes.c_int),
+            ("from_player", ctypes.c_int)  # 1/0
+        ]
+
     class SteinWrapper:
         ray_out_array = (ctypes.c_int * 8)()
         ray_out_ptr = ctypes.addressof(ray_out_array)
         
         move_out_array = (ctypes.c_double * 2)()
         move_out_ptr = ctypes.addressof(move_out_array)
+
+        @staticmethod
+        def update_projectiles_native(proj_addr, count, dt, map_addr, w, h, layers, min_layer):
+            stein_lib.update_projectiles_c(
+                proj_addr, count, dt, 
+                map_addr, w, h, layers, min_layer
+            )
+
         @staticmethod
         def check_line_of_sight(sx, sy, z, tx, ty, map_addr, w, h, layers, min_layer):
             result = stein_lib.check_line_of_sight_c(
@@ -140,6 +160,13 @@ init -50 python:
                 ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int # w, h, layers, min
             ]
             stein_lib.get_map_height_c.restype = ctypes.c_double
+
+            stein_lib.update_projectiles_c.argtypes = [
+                ctypes.c_void_p, ctypes.c_int, ctypes.c_double, # array, count, dt
+                ctypes.c_void_p,                                # map_ptr
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int
+            ]
+            stein_lib.update_projectiles_c.restype = None
 
             sys.modules["stein_core"] = SteinWrapper
             print(f"Sayoristein: Native motor loaded in {library_path}")
@@ -1558,10 +1585,24 @@ init -10 python:
 
         def attack(self, player):
             super(Guard, self).attack(player)
-            dir_x = player.x - self.x; dir_y = player.y - self.y
+            
+            dir_x = player.x - self.x
+            dir_y = player.y - self.y
             dist = math.sqrt(dir_x**2 + dir_y**2)
-            if dist > 0: dir_x /= dist; dir_y /= dist
-            self.wm.projectiles.append(Projectile(self.wm, self.x, self.y, dir_x, dir_y, self.bullet_texture_index, self.damage, fired_by_player=False))
+            
+            if dist > 0:
+                dir_x /= dist
+                dir_y /= dist
+            
+            self.wm.spawn_projectile(
+                self.x, self.y, self.wm.player.z + 0.5, 
+                dir_x, dir_y, 0.0,
+                12.0, 
+                self.bullet_texture_index, 
+                self.damage, 
+                False
+            )
+            
             renpy.sound.play("sounds/e-gunshot.ogg", channel="audio")
 
     class Yuritler(Guard):
@@ -1571,14 +1612,26 @@ init -10 python:
         
         def attack(self, player):
             self.attack_timer = self.attack_cooldown
-            dir_x = player.x - self.x; dir_y = player.y - self.y
+            dir_x = player.x - self.x
+            dir_y = player.y - self.y
             dist = math.sqrt(dir_x**2 + dir_y**2)
+            
             if dist > 0:
                 base_angle = math.atan2(dir_y, dir_x)
                 for i in range(4):
                     offset = (i / 3.0 - 0.5) * 0.2
-                    p_dirx = math.cos(base_angle + offset); p_diry = math.sin(base_angle + offset)
-                    self.wm.projectiles.append(Projectile(self.wm, self.x, self.y, p_dirx, p_diry, self.bullet_texture_index, self.damage, fired_by_player=False))
+                    p_dirx = math.cos(base_angle + offset)
+                    p_diry = math.sin(base_angle + offset)
+                    
+                    self.wm.spawn_projectile(
+                        self.x, self.y, self.wm.player.z + 0.5,
+                        p_dirx, p_diry, 0.0,
+                        12.0,
+                        self.bullet_texture_index, 
+                        self.damage, 
+                        False
+                    )
+            
             renpy.sound.play("sounds/e-gunshot.ogg", channel="audio")
 
     class EliteGuard(Guard):
@@ -1600,7 +1653,9 @@ init -10 python:
             dir_x = player.x - self.x; dir_y = player.y - self.y
             dist = math.sqrt(dir_x**2 + dir_y**2)
             if dist > 0: dir_x /= dist; dir_y /= dist
-            self.wm.projectiles.append(Projectile(self.wm, self.x, self.y, dir_x, dir_y, self.bullet_texture_index, self.damage, fired_by_player=False))
+            
+            self.wm.spawn_projectile(self.x, self.y, self.wm.player.z + 0.5, dir_x, dir_y, 0.0, 12.0, self.bullet_texture_index, self.damage, False)
+            
             renpy.sound.play("sounds/e-gunshot.ogg", channel="audio")
             self.shots_fired_in_burst += 1
             if self.shots_fired_in_burst >= self.burst_limit: self.is_reloading = True; self.reload_timer = self.reload_time
@@ -1985,114 +2040,83 @@ init -10 python:
                 fl_bob_x = math.sin(st * bob_speed) * fl_amp_x
                 fl_bob_y = abs(math.cos(st * bob_speed)) * fl_amp_y
 
-            sprite_data = []
-            if hasattr(c, 'sprite_positions') and c.sprite_positions:
-                for spr in c.sprite_positions:
-                    sprite_data.append((spr[0], spr[1], float(spr[2]), 0.0))
-            elif hasattr(renpy.store, 'stein_sprites'):
-                for spr in renpy.store.stein_sprites:
-                    sprite_data.append((spr[0], spr[1], float(spr[2]), 0.0))
+            renderer = renpy.render(self.base_displayable, width, height, st, at)
+            renderer.add_shader("stein.raycaster")
 
-            if hasattr(c, 'enemies'):
-                for enemy in c.enemies:
-                    sprite_data.append((enemy.x, enemy.y, float(enemy.texture_index), 0.0))
-            
-            if hasattr(c, 'projectiles'):
-                for p in c.projectiles:
-                    if getattr(p, 'is_invisible', False): continue
-                    # Normalize pitch to match camera pitch logic (slope)
-                    pitch = getattr(p, 'pitch', 0.0) / float(height)
-                    sprite_data.append((p.x, p.y, float(p.texture_index), pitch))
-            
-            flash_intensity = 0.0
-            
-            import time 
-            current_sys_time = time.time()
-            
-            current_weapon = c.weapons[c.player.current_weapon_name]
-            
-            time_since_shot = current_sys_time - current_weapon.last_fired
-            
-            if current_weapon.projectile_type and time_since_shot < 0.1:
-                flash_intensity = 1.0 - (time_since_shot / 0.1)
-                flash_intensity = max(0.0, min(1.0, flash_intensity))
-            
-            MAX_LIGHTS = 16
-            lamp_id = 2.0 
-            
-            potential_lights = []
-            if hasattr(c, 'sprite_positions'):
-                for spr in c.sprite_positions:
-                    if spr[2] == lamp_id: 
-                        potential_lights.append((spr[0], spr[1]))
-            
-            def dist_sq_lights(pos): return (pos[0] - c.player.x)**2 + (pos[1] - c.player.y)**2
-            potential_lights.sort(key=dist_sq_lights)
-            
-            final_lights_data = []
-            for i in range(MAX_LIGHTS):
-                if i < len(potential_lights):
-                    lx, ly = potential_lights[i]
-                    final_lights_data.append((lx, ly, 6.5, 1.8)) 
-                else:
-                    final_lights_data.append((0.0, 0.0, 0.0, 0.0))
+            real_data = []
+            total_count = 0
+            MAX_SPRITES_SHADER = 64 
 
-            def get_dist_sq(s):
-                return (s[0] - c.player.x)**2 + (s[1] - c.player.y)**2
-            sprite_data.sort(key=get_dist_sq, reverse=True)
+            for sp in c.sprite_positions:
+                if total_count >= MAX_SPRITES_SHADER: break
+                real_data.extend([
+                    sp[0], 
+                    sp[1], 
+                    float(sp[2]), 
+                    0.0
+                ])
+                total_count += 1
 
-            MAX_SPRITES = 64
-            num_active = len(sprite_data)
-            if num_active > MAX_SPRITES:
-                sprite_data = sprite_data[:MAX_SPRITES]
-                num_active = MAX_SPRITES
-            
-            while len(sprite_data) < MAX_SPRITES:
-                sprite_data.append((0.0, 0.0, 0.0, 0.0))
+            for e in c.enemies:
+                if total_count >= MAX_SPRITES_SHADER: break
+                real_data.extend([
+                    e.x, 
+                    e.y, 
+                    float(e.texture_index), 
+                    0.0
+                ])
+                total_count += 1
 
-            child_render = renpy.render(self.base_displayable, width, height, st, at)
-            child_render.add_shader("stein.raycaster")
-            
+            c_projs = c.proj_array
+            for i in range(c.MAX_PROJECTILES):
+                if total_count >= MAX_SPRITES_SHADER: break
+                
+                if c_projs[i].active == 1:
+                    real_data.extend([
+                        c_projs[i].x, 
+                        c_projs[i].y, 
+                        float(c_projs[i].texture_idx), 
+                        float(c_projs[i].pitch)
+                    ])
+                    total_count += 1
+
+            padding_needed = (MAX_SPRITES_SHADER * 4) - len(real_data)
+            if padding_needed > 0:
+                real_data.extend([0.0] * padding_needed)
+
+            renderer.add_uniform("u_num_active_sprites", int(total_count))
+            renderer.add_uniform("u_sprites", real_data)
+
             # ADS Zoom Logic
             is_aiming = c.is_aiming or c.gp_aiming
             zoom_factor = 0.6 if is_aiming else 1.0
             
-            # Aspect Ratio Correction for 3D
-            # Ensure square voxels by matching Vertical FOV to Horizontal FOV
             aspect_ratio = float(width) / float(height)
             plane_len = math.sqrt(c.player.planex**2 + c.player.planey**2)
-            if plane_len == 0: plane_len = 0.66 # Fallback
-            
-            # vertical_scale = (Aspect / Plane) * (1 / Zoom)
-            # Higher scale = Narrower Vertical FOV
+            if plane_len == 0: plane_len = 0.66
             vertical_scale = (aspect_ratio / plane_len) / zoom_factor
             
-            # Apply zoom to plane
             plane_x = c.player.planex * zoom_factor
             plane_y = c.player.planey * zoom_factor
 
-            child_render.add_uniform('u_resolution', (float(width), float(height)))
-            child_render.add_uniform('u_time', st)
-            child_render.add_uniform('u_player_pos', (c.player.x, c.player.y))
-            child_render.add_uniform('u_player_dir', (c.player.dirx, c.player.diry))
-            child_render.add_uniform('u_player_plane', (plane_x, plane_y))
+            renderer.add_uniform('u_resolution', (float(width), float(height)))
+            renderer.add_uniform('u_time', st)
+            renderer.add_uniform('u_player_pos', (c.player.x, c.player.y))
+            renderer.add_uniform('u_player_dir', (c.player.dirx, c.player.diry))
+            renderer.add_uniform('u_player_plane', (plane_x, plane_y))
+            renderer.add_uniform('u_pitch', (c.player.pitch / float(height)) + bob_offset)
+            renderer.add_uniform('u_z_offset', c.player.z)
+            renderer.add_uniform('u_vertical_scale', vertical_scale)
+            renderer.add_uniform('u_sky_texture', c.sky_texture)
+            renderer.add_uniform('u_volumetric_clouds', 1.0 if persistent.stein_volumetric_clouds else 0.0)
             
-            # Head Bobbing applied to pitch
-            child_render.add_uniform('u_pitch', (c.player.pitch / float(height)) + bob_offset)
-            child_render.add_uniform('u_z_offset', c.player.z)
-            child_render.add_uniform('u_vertical_scale', vertical_scale)
-            child_render.add_uniform('u_sky_texture', c.sky_texture)
-            child_render.add_uniform('u_volumetric_clouds', 1.0 if persistent.stein_volumetric_clouds else 0.0)
-            
-            rain_int = 0.0
-            snow_int = 0.0
+            rain_int = 0.0; snow_int = 0.0
             if hasattr(c, 'weather_state'):
                 if c.weather_state == "rain": rain_int = 1.0
                 elif c.weather_state == "snow": snow_int = 1.0
-            
-            child_render.add_uniform('u_rain_intensity', rain_int)
-            child_render.add_uniform('u_snow_intensity', snow_int)
-            child_render.add_uniform('u_wetness', getattr(c, 'wetness', 0.0))
+            renderer.add_uniform('u_rain_intensity', rain_int)
+            renderer.add_uniform('u_snow_intensity', snow_int)
+            renderer.add_uniform('u_wetness', getattr(c, 'wetness', 0.0))
             
             current_hour = 0.0
             if c.is_arena_mode:
@@ -2100,105 +2124,46 @@ init -10 python:
                 current_hour = (c.arena_start_hour + elapsed_hours) % 24.0
             else:
                 current_hour = float(c.lighting_preset.get('time_id', 0.0))
+            renderer.add_uniform('u_time_of_day', current_hour)
+
+            renderer.add_uniform('u_ambient_color', c.lighting_preset['ambient_base'])
+            renderer.add_uniform('u_ambient_near_color', c.lighting_preset['ambient_near'])
+
+            renderer.add_uniform('u_map_size', (float(c.map_w), float(c.map_h)))
+            renderer.add_uniform('u_map_uv_scale', c.map_uv_scale)
+            renderer.add_uniform('u_map_texture', c.map_texture)
+            renderer.add_uniform('u_map_layer_norm_height', c.map_layer_norm_height)
+            renderer.add_uniform('u_map_layer_base_y', float(c.min_layer))
+            renderer.add_uniform('u_map_layer_count', float(c.num_layers))
+            renderer.add_uniform('u_map_tex_pixel_size', c.map_tex_pixel_size)
+            renderer.add_uniform('u_wall_atlas', c.wall_atlas)
+            renderer.add_uniform('u_floor_texture', c.floor_texture)
+            renderer.add_uniform('u_num_textures', float(c.num_textures))
+            renderer.add_uniform('u_sprite_atlas', c.sprite_atlas)
+            renderer.add_uniform('u_num_sprite_textures', float(c.num_sprite_textures))
+
+            renderer.add_uniform('u_flashlight_active', 1.0 if c.flashlight_on else 0.0)
+            renderer.add_uniform('u_flashlight_bob', (fl_bob_x, fl_bob_y))
             
-            child_render.add_uniform('u_time_of_day', current_hour)
-
-            ambient_base = c.lighting_preset['ambient_base']
-            ambient_near = c.lighting_preset['ambient_near']
-
-            if c.is_arena_mode:
-                # Define colors
-                night_base = (0.1, 0.1, 0.15)
-                night_near = (0.15, 0.15, 0.2)
-                
-                day_base = (0.8, 0.8, 0.8)
-                day_near = (0.9, 0.9, 0.9)
-                
-                sunset_base = (0.6, 0.4, 0.3)
-                sunset_near = (0.7, 0.5, 0.4)
-                
-                t = current_hour
-                
-                def mix_col(c1, c2, p):
-                    return (
-                        c1[0] * (1.0 - p) + c2[0] * p,
-                        c1[1] * (1.0 - p) + c2[1] * p,
-                        c1[2] * (1.0 - p) + c2[2] * p
-                    )
-
-                if t < 5.0:
-                    ambient_base = night_base; ambient_near = night_near
-                elif t < 8.0:
-                    p = (t - 5.0) / 3.0
-                    ambient_base = mix_col(night_base, day_base, p)
-                    ambient_near = mix_col(night_near, day_near, p)
-                elif t < 16.0:
-                    ambient_base = day_base; ambient_near = day_near
-                elif t < 19.0:
-                    p = (t - 16.0) / 3.0
-                    ambient_base = mix_col(day_base, sunset_base, p)
-                    ambient_near = mix_col(day_near, sunset_near, p)
-                elif t < 21.0:
-                    p = (t - 19.0) / 2.0
-                    ambient_base = mix_col(sunset_base, night_base, p)
-                    ambient_near = mix_col(sunset_near, night_near, p)
-                else:
-                    ambient_base = night_base; ambient_near = night_near
-
-            child_render.add_uniform('u_map_size', (float(c.map_w), float(c.map_h)))
-            child_render.add_uniform('u_map_uv_scale', c.map_uv_scale)
-            child_render.add_uniform('u_map_texture', c.map_texture)
-            child_render.add_uniform('u_map_layer_norm_height', c.map_layer_norm_height)
-            child_render.add_uniform('u_map_layer_base_y', float(c.min_layer))
-            child_render.add_uniform('u_map_layer_count', float(c.num_layers))
-            child_render.add_uniform('u_map_tex_pixel_size', c.map_tex_pixel_size)
+            renderer.add_uniform('u_soft_shadows', 1.0 if getattr(persistent, "stein_soft_shadows", True) else 0.0)
+            renderer.add_uniform('u_enable_shadows', 1.0 if getattr(persistent, "stein_enable_shadows", True) else 0.0)
+            renderer.add_uniform('u_max_dist', 500.0 if c.builder_mode else 60.0)
+            renderer.add_uniform('u_simple_floor', 1.0 if getattr(persistent, "stein_simple_floor", False) else 0.0)
             
-            child_render.add_uniform('u_wall_atlas', c.wall_atlas)
-            child_render.add_uniform('u_floor_texture', c.floor_texture)
-            child_render.add_uniform('u_num_textures', c.num_textures)
-            
-            child_render.add_uniform('u_sprite_atlas', c.sprite_atlas)
-            child_render.add_uniform('u_num_sprite_textures', c.num_sprite_textures)
-            child_render.add_uniform('u_sprites', sprite_data)
-            child_render.add_uniform('u_num_active_sprites', num_active)
+            # Flash
+            import time
+            current_weapon = c.weapons[c.player.current_weapon_name]
+            flash_intensity = 0.0
+            if current_weapon.projectile_type and (time.time() - current_weapon.last_fired) < 0.1:
+                flash_intensity = 1.0 - ((time.time() - current_weapon.last_fired) / 0.1)
+            renderer.add_uniform('u_flash_intensity', flash_intensity)
+            renderer.add_uniform('u_flash_color', (1.0, 0.8, 0.4))
 
-            child_render.add_uniform('u_flash_intensity', flash_intensity)
-            child_render.add_uniform('u_flashlight_active', 1.0 if c.flashlight_on else 0.0)
-            
-            child_render.add_uniform('u_flashlight_bob', (fl_bob_x, fl_bob_y))
-            
-            lighting_quality = getattr(persistent, "stein_lighting_quality", 0) # 0=High, 1=Low
+            renderer.add_uniform('u_light_positions', [0.0] * 64)
+            renderer.add_uniform('u_num_active_lights', 0.0)
 
-            if lighting_quality == 1: # Low
-                soft_shadows = 0.0
-                enable_shadows = 0.0
-                max_active_lights = 4
-                max_dist = 30.0
-                simple_floor = 1.0
-            else: # High
-                soft_shadows = 1.0 if getattr(persistent, "stein_soft_shadows", True) else 0.0
-                enable_shadows = 1.0 if getattr(persistent, "stein_enable_shadows", True) else 0.0
-                max_active_lights = 16
-                max_dist = 60.0
-                simple_floor = 0.0
-
-            if c.builder_mode:
-                max_dist = 500.0
-
-            child_render.add_uniform('u_soft_shadows', soft_shadows)
-            child_render.add_uniform('u_enable_shadows', enable_shadows)
-            child_render.add_uniform('u_max_dist', max_dist)
-            child_render.add_uniform('u_simple_floor', simple_floor)
-            
-            # Lighting Uniforms
-            child_render.add_uniform('u_ambient_color', ambient_base)
-            child_render.add_uniform('u_ambient_near_color', ambient_near)
-
-            child_render.add_uniform('u_light_positions', final_lights_data)
-            child_render.add_uniform('u_num_active_lights', float(min(len(potential_lights), max_active_lights)))
-
-            renpy.redraw(self, 0.01)
-            return child_render
+            renpy.redraw(self, 0.000001)
+            return renderer
 
     class GPURenpystein(renpy.Displayable):
         def __init__(self, width, height, worldMap, exits=[], internal_width=None, internal_height=None, lighting_preset=None, **kwargs):
@@ -2436,6 +2401,26 @@ init -10 python:
                 arrow_surf = pygame.image.load(f).convert_alpha()
             self.arrow_img = pygame.transform.scale(arrow_surf, (30, 30))
 
+            self.max_entities = 1024
+            
+            self.sort_buffer = (ctypes.c_int * self.max_entities)()
+            
+            self.shader_sprite_buffer = (ctypes.c_float * (self.max_entities * 5))()
+            
+            self.entities_buffer = (ctypes.c_double * (self.max_entities * 4))()
+            self.entities_ptr = ctypes.addressof(self.entities_buffer)
+            
+            self.shader_sprite_ptr = ctypes.addressof(self.shader_sprite_buffer)
+
+            self.sort_ptr = ctypes.addressof(self.sort_buffer)
+
+            self.MAX_PROJECTILES = 256
+            self.proj_array = (ProjectileData * self.MAX_PROJECTILES)()
+            self.proj_ptr = ctypes.addressof(self.proj_array)
+            
+            for i in range(self.MAX_PROJECTILES):
+                self.proj_array[i].active = 0
+
             self.projectiles = []
             self.enemies = []
             self.sprite_positions = renpy.store.stein_sprites
@@ -2461,6 +2446,20 @@ init -10 python:
 
             if self.is_arena_mode and self.current_round == 0:
                 self.start_next_round()
+
+        def spawn_projectile(self, x, y, z, dx, dy, dz, speed, tex_id, damage, is_player, pitch=0.0):
+            for i in range(self.MAX_PROJECTILES):
+                if self.proj_array[i].active == 0:
+                    p = self.proj_array[i]
+                    p.x = x; p.y = y; p.z = z
+                    p.dir_x = dx; p.dir_y = dy; p.dir_z = dz
+                    p.speed = speed
+                    p.texture_idx = tex_id
+                    p.damage = damage
+                    p.from_player = 1 if is_player else 0
+                    p.pitch = pitch
+                    p.active = 1
+                    return
 
         def equip_weapon(self, weapon_name):
             if weapon_name in self.weapon_library:
@@ -2998,8 +2997,46 @@ init -10 python:
             self.hit_marker_timer = max(0, self.hit_marker_timer - dt)
             self.check_item_pickup()
             for enemy in self.enemies: enemy.update(dt, self.player)
-            for p in list(self.projectiles):
-                if not p.update(dt): self.projectiles.remove(p)
+            
+            map_addr, _ = self.flat_map_buffer.buffer_info()
+            SteinWrapper.update_projectiles_native(
+                self.proj_ptr, self.MAX_PROJECTILES, dt,
+                map_addr, self.mapWidth, self.mapHeight, 
+                self.num_layers, self.min_layer
+            )
+
+            for i in range(self.MAX_PROJECTILES):
+                p = self.proj_array[i]
+                if p.active == 0: continue
+                
+                if p.from_player == 1:
+                    for e in list(self.enemies):
+                        dist_sq = (e.x - p.x)**2 + (e.y - p.y)**2
+                        if dist_sq < 0.25:
+                            e.health -= p.damage
+                            renpy.sound.play("sounds/ow.ogg", channel="audio")
+                            p.active = 0 
+                            
+                            if e.health <= 0:
+                                if e in self.enemies: self.enemies.remove(e)
+                                self.sprite_positions.append((e.x, e.y, e.destroyed_texture_index))
+                            break 
+                else:
+                    dx = self.player.x - p.x
+                    dy = self.player.y - p.y
+                    dist_sq = dx*dx + dy*dy
+                    
+                    if dist_sq < 0.25:
+                        # Check Z height
+                        if p.z >= self.player.z and p.z <= self.player.z + 1.0:
+                            if not self.builder_mode:
+                                self.player.health -= p.damage
+                                self.add_damage_indicator(-p.dir_x, -p.dir_y)
+                                self.damage_flash_timer = 0.2
+                                self.time_since_last_damage = 0.0
+                                renpy.sound.play("sounds/ow.ogg", channel="audio")
+                            p.active = 0
+
             if self.mouse_firing or self.gp_firing: self.shoot_weapon()
 
             if self.is_arena_mode:
@@ -3066,7 +3103,9 @@ init -10 python:
             pitch = self.player.pitch
             is_ads = self.is_aiming or self.gp_aiming
             
-            bullet_invisible = True 
+            speed = 100.0
+            dz = pitch / float(self.height)
+            z_start = self.player.z + 0.5
 
             if weapon.projectile_type == 'shotgun':
                 import random
@@ -3076,10 +3115,10 @@ init -10 python:
                     angle = self.player.rot + spread
                     pdx = math.cos(angle)
                     pdy = math.sin(angle)
-                    self.projectiles.append(Projectile(self, self.player.x, self.player.y, pdx, pdy, self.bullet_texture_index, weapon.damage, fired_by_player=True, pitch=pitch, is_invisible=bullet_invisible))
+                    self.spawn_projectile(self.player.x, self.player.y, z_start, pdx, pdy, dz, speed, self.bullet_texture_index, weapon.damage, True, pitch=pitch)
                 renpy.sound.play("sounds/shotgun.ogg", channel="audio")
             elif weapon.projectile_type == 'bullet':
-                self.projectiles.append(Projectile(self, self.player.x, self.player.y, dx, dy, self.bullet_texture_index, weapon.damage, fired_by_player=True, pitch=pitch, is_invisible=bullet_invisible))
+                self.spawn_projectile(self.player.x, self.player.y, z_start, dx, dy, dz, speed, self.bullet_texture_index, weapon.damage, True, pitch=pitch)
                 renpy.sound.play("sounds/gunshot.ogg", channel="audio")
             else:
                 hit = False

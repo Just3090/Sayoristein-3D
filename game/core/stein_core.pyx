@@ -289,3 +289,74 @@ cdef public double get_map_height_c(
                     max_z = top_z
                     
     return max_z
+
+cdef struct ProjectileData:
+    double x, y, z
+    double dir_x, dir_y, dir_z
+    double speed
+    int active
+    int texture_idx
+    double pitch
+    int damage
+    int from_player
+
+cdef inline double _get_height_fast(int x, int y, int check_z, int w, int h, int layers, int min_layer, int* flat_map):
+    if x < 0 or x >= w or y < 0 or y >= h: return 0.0
+    cdef double max_z = 0.0
+    cdef int l, idx, tile
+    cdef double top_z, block_height
+    
+    for l in range(layers):
+        idx = (l * w * h) + (x * h) + y
+        tile = flat_map[idx]
+        if tile > 0:
+            block_height = 0.5 if tile == 20 else 1.0
+            top_z = (min_layer + l) + block_height
+            if top_z <= (check_z + 1.0): 
+                if top_z > max_z: max_z = top_z
+    return max_z
+
+cdef public void update_projectiles_c(
+    size_t proj_array_addr,
+    int count,
+    double dt,
+    size_t flat_map_addr,
+    int w, int h, int layers, int min_layer
+):
+    cdef ProjectileData* projs = <ProjectileData*>proj_array_addr
+    cdef int* flat_map = <int*>flat_map_addr
+    cdef int i
+    cdef double dist_to_travel, traveled, step_dist
+    cdef double next_x, next_y, next_z
+    cdef double floor_h
+    cdef double STEP_SIZE = 0.4
+
+    for i in range(count):
+        if projs[i].active == 0:
+            continue
+
+        dist_to_travel = projs[i].speed * dt
+        traveled = 0.0
+
+        while traveled < dist_to_travel:
+            step_dist = STEP_SIZE
+            if (dist_to_travel - traveled) < STEP_SIZE:
+                step_dist = dist_to_travel - traveled
+
+            next_x = projs[i].x + projs[i].dir_x * step_dist
+            next_y = projs[i].y + projs[i].dir_y * step_dist
+            next_z = projs[i].z + projs[i].dir_z * step_dist
+
+            if is_wall(<int>floor(next_x), <int>floor(next_y), <int>floor(next_z), w, h, layers, min_layer, flat_map):
+                projs[i].active = 0
+                break
+
+            floor_h = _get_height_fast(<int>floor(next_x), <int>floor(next_y), <int>floor(next_z), w, h, layers, min_layer, flat_map)
+            if next_z < floor_h:
+                projs[i].active = 0
+                break
+
+            projs[i].x = next_x
+            projs[i].y = next_y
+            projs[i].z = next_z
+            traveled += step_dist

@@ -368,6 +368,9 @@ init python:
         """
         Initializes or resets the game state for a specific level.
         """
+
+        store.is_arena_mode = arena
+        
         if level == 2:
             level_data = level2_data
         elif level == 3:
