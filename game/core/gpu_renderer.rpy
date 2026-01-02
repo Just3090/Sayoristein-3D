@@ -82,6 +82,16 @@ init -50 python:
             )
 
         @staticmethod
+        def prepare_scene_sprites(px, py, proj_ptr, max_projs, enemy_ptr, num_enemies, static_ptr, num_statics, out_ptr, max_sprites):
+            return stein_lib.prepare_scene_sprites_c(
+                px, py,
+                proj_ptr, max_projs,
+                enemy_ptr, num_enemies,
+                static_ptr, num_statics,
+                out_ptr, max_sprites
+            )
+
+        @staticmethod
         def check_line_of_sight(sx, sy, z, tx, ty, map_addr, w, h, layers, min_layer):
             result = stein_lib.check_line_of_sight_c(
                 sx, sy, z, tx, ty,
@@ -167,6 +177,15 @@ init -50 python:
                 ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int
             ]
             stein_lib.update_projectiles_c.restype = None
+
+            stein_lib.prepare_scene_sprites_c.argtypes = [
+                ctypes.c_double, ctypes.c_double,
+                ctypes.c_void_p, ctypes.c_int,
+                ctypes.c_void_p, ctypes.c_int,
+                ctypes.c_void_p, ctypes.c_int,
+                ctypes.c_void_p, ctypes.c_int
+            ]
+            stein_lib.prepare_scene_sprites_c.restype = ctypes.c_int
 
             sys.modules["stein_core"] = SteinWrapper
             print(f"Sayoristein: Native motor loaded in {library_path}")
@@ -2043,49 +2062,36 @@ init -10 python:
             renderer = renpy.render(self.base_displayable, width, height, st, at)
             renderer.add_shader("stein.raycaster")
 
-            real_data = []
-            total_count = 0
-            MAX_SPRITES_SHADER = 64 
-
-            for sp in c.sprite_positions:
-                if total_count >= MAX_SPRITES_SHADER: break
-                real_data.extend([
-                    sp[0], 
-                    sp[1], 
-                    float(sp[2]), 
-                    0.0
-                ])
-                total_count += 1
-
-            for e in c.enemies:
-                if total_count >= MAX_SPRITES_SHADER: break
-                real_data.extend([
-                    e.x, 
-                    e.y, 
-                    float(e.texture_index), 
-                    0.0
-                ])
-                total_count += 1
-
-            c_projs = c.proj_array
-            for i in range(c.MAX_PROJECTILES):
-                if total_count >= MAX_SPRITES_SHADER: break
+            enemy_count = 0
+            for i, e in enumerate(c.enemies):
+                if i >= 50: break
+                idx = i * 4
+                c.enemy_data_buffer[idx] = e.x
+                c.enemy_data_buffer[idx+1] = e.y
+                c.enemy_data_buffer[idx+2] = float(e.texture_index)
+                c.enemy_data_buffer[idx+3] = 0.0 # Pitch
+                enemy_count += 1
                 
-                if c_projs[i].active == 1:
-                    real_data.extend([
-                        c_projs[i].x, 
-                        c_projs[i].y, 
-                        float(c_projs[i].texture_idx), 
-                        float(c_projs[i].pitch)
-                    ])
-                    total_count += 1
+            static_count = 0
+            for i, sp in enumerate(c.sprite_positions):
+                if i >= 50: break
+                idx = i * 4
+                c.static_data_buffer[idx] = sp[0]
+                c.static_data_buffer[idx+1] = sp[1]
+                c.static_data_buffer[idx+2] = float(sp[2])
+                c.static_data_buffer[idx+3] = 0.0
+                static_count += 1
 
-            padding_needed = (MAX_SPRITES_SHADER * 4) - len(real_data)
-            if padding_needed > 0:
-                real_data.extend([0.0] * padding_needed)
+            active_sprites = SteinWrapper.prepare_scene_sprites(
+                c.player.x, c.player.y,
+                c.proj_ptr, c.MAX_PROJECTILES,
+                c.enemy_data_ptr, enemy_count,
+                c.static_data_ptr, static_count,
+                c.shader_sprite_ptr, 64
+            )
 
-            renderer.add_uniform("u_num_active_sprites", int(total_count))
-            renderer.add_uniform("u_sprites", real_data)
+            renderer.add_uniform("u_num_active_sprites", active_sprites)
+            renderer.add_uniform("u_sprites", c.shader_sprite_buffer)
 
             # ADS Zoom Logic
             is_aiming = c.is_aiming or c.gp_aiming
@@ -2405,7 +2411,7 @@ init -10 python:
             
             self.sort_buffer = (ctypes.c_int * self.max_entities)()
             
-            self.shader_sprite_buffer = (ctypes.c_float * (self.max_entities * 5))()
+            self.shader_sprite_buffer = (ctypes.c_float * 256)()
             
             self.entities_buffer = (ctypes.c_double * (self.max_entities * 4))()
             self.entities_ptr = ctypes.addressof(self.entities_buffer)
@@ -2417,6 +2423,12 @@ init -10 python:
             self.MAX_PROJECTILES = 256
             self.proj_array = (ProjectileData * self.MAX_PROJECTILES)()
             self.proj_ptr = ctypes.addressof(self.proj_array)
+
+            self.enemy_data_buffer = (ctypes.c_double * (50 * 4))() 
+            self.enemy_data_ptr = ctypes.addressof(self.enemy_data_buffer)
+            
+            self.static_data_buffer = (ctypes.c_double * (50 * 4))()
+            self.static_data_ptr = ctypes.addressof(self.static_data_buffer)
             
             for i in range(self.MAX_PROJECTILES):
                 self.proj_array[i].active = 0
@@ -3014,6 +3026,7 @@ init -10 python:
                         dist_sq = (e.x - p.x)**2 + (e.y - p.y)**2
                         if dist_sq < 0.25:
                             e.health -= p.damage
+                            self.hit_marker_timer = 0.15
                             renpy.sound.play("sounds/ow.ogg", channel="audio")
                             p.active = 0 
                             

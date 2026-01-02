@@ -5,3 +5,4 @@ resolve_movement_c
 check_line_of_sight_c
 get_map_height_c
 update_projectiles_c
+prepare_scene_sprites_c

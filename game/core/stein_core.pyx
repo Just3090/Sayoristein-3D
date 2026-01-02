@@ -66,6 +66,7 @@ Build Instructions:
 
 from libc.math cimport floor, abs, sqrt
 from libc.stddef cimport size_t
+from libc.stdlib cimport qsort
 
 
 cdef public void cast_ray_c(
@@ -360,3 +361,90 @@ cdef public void update_projectiles_c(
             projs[i].y = next_y
             projs[i].z = next_z
             traveled += step_dist
+
+cdef struct RenderSprite:
+    double x, y
+    double dist_sq
+    int texture_idx
+    double pitch
+
+cdef int compare_sprites(const void* a, const void* b) noexcept nogil:
+    cdef RenderSprite* sa = <RenderSprite*>a
+    cdef RenderSprite* sb = <RenderSprite*>b
+    if sa.dist_sq < sb.dist_sq: return 1
+    if sa.dist_sq > sb.dist_sq: return -1
+    return 0
+
+cdef public int prepare_scene_sprites_c(
+    double player_x, double player_y,
+    
+    size_t proj_array_addr, int max_projs,
+    size_t enemies_in_addr, int num_enemies,
+    size_t static_in_addr, int num_statics,
+    
+    size_t output_buffer_addr, int max_sprites_shader
+):
+    cdef ProjectileData* projs = <ProjectileData*>proj_array_addr
+    
+    cdef double* enemies = <double*>enemies_in_addr
+    cdef double* statics = <double*>static_in_addr
+    
+    cdef float* out_buf = <float*>output_buffer_addr
+    
+    cdef RenderSprite sort_buf[128] 
+    cdef int count = 0
+    cdef int i, k
+    cdef double dx, dy
+    
+    for i in range(max_projs):
+        if projs[i].active == 1:
+            if count >= 128: break
+            dx = projs[i].x - player_x
+            dy = projs[i].y - player_y
+            sort_buf[count].x = projs[i].x
+            sort_buf[count].y = projs[i].y
+            sort_buf[count].dist_sq = dx*dx + dy*dy
+            sort_buf[count].texture_idx = projs[i].texture_idx
+            sort_buf[count].pitch = projs[i].pitch
+            count += 1
+
+    for i in range(num_enemies):
+        if count >= 128: break
+        k = i * 4
+        dx = enemies[k] - player_x
+        dy = enemies[k+1] - player_y
+        sort_buf[count].x = enemies[k]
+        sort_buf[count].y = enemies[k+1]
+        sort_buf[count].dist_sq = dx*dx + dy*dy
+        sort_buf[count].texture_idx = <int>enemies[k+2]
+        sort_buf[count].pitch = enemies[k+3]
+        count += 1
+
+    for i in range(num_statics):
+        if count >= 128: break
+        k = i * 4
+        dx = statics[k] - player_x
+        dy = statics[k+1] - player_y
+        sort_buf[count].x = statics[k]
+        sort_buf[count].y = statics[k+1]
+        sort_buf[count].dist_sq = dx*dx + dy*dy
+        sort_buf[count].texture_idx = <int>statics[k+2]
+        sort_buf[count].pitch = statics[k+3]
+        count += 1
+        
+    qsort(sort_buf, count, sizeof(RenderSprite), compare_sprites)
+    
+    cdef int limit = count
+    if limit > max_sprites_shader:
+        limit = max_sprites_shader
+        
+    for i in range(limit):
+        out_buf[i*4 + 0] = <float>sort_buf[i].x
+        out_buf[i*4 + 1] = <float>sort_buf[i].y
+        out_buf[i*4 + 2] = <float>sort_buf[i].texture_idx
+        out_buf[i*4 + 3] = <float>sort_buf[i].pitch
+        
+    for i in range(limit * 4, max_sprites_shader * 4):
+        out_buf[i] = 0.0
+        
+    return limit
