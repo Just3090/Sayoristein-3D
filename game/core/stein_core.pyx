@@ -189,3 +189,71 @@ cdef public void resolve_movement_c(
 
     output[0] = new_x
     output[1] = new_y
+
+cdef public int check_line_of_sight_c(
+    double start_x, double start_y, double z,
+    double target_x, double target_y,
+    size_t flat_map_addr,
+    int w, int h, int layers, int min_layer
+):
+    cdef int* flat_map = <int*>flat_map_addr
+    
+    cdef double dir_x = target_x - start_x
+    cdef double dir_y = target_y - start_y
+    cdef double dist_sq = dir_x*dir_x + dir_y*dir_y
+    
+    if dist_sq < 0.1:
+        return 1
+
+    cdef double target_dist = sqrt(dist_sq)
+    
+    dir_x /= target_dist
+    dir_y /= target_dist
+
+    cdef int map_x = <int>floor(start_x)
+    cdef int map_y = <int>floor(start_y)
+    cdef int map_z = <int>floor(z)
+    
+    cdef double delta_dist_x = abs(1.0 / dir_x) if dir_x != 0 else 1e30
+    cdef double delta_dist_y = abs(1.0 / dir_y) if dir_y != 0 else 1e30
+    
+    cdef int step_x = 1 if dir_x > 0 else -1
+    cdef int step_y = 1 if dir_y > 0 else -1
+    
+    cdef double side_dist_x, side_dist_y
+    
+    if dir_x > 0: side_dist_x = (map_x + 1.0 - start_x) * delta_dist_x
+    else:         side_dist_x = (start_x - map_x) * delta_dist_x
+    
+    if dir_y > 0: side_dist_y = (map_y + 1.0 - start_y) * delta_dist_y
+    else:         side_dist_y = (start_y - map_y) * delta_dist_y
+
+    cdef double current_dist = 0.0
+    cdef int layer_offset = map_z - min_layer
+    cdef int idx = 0
+
+    if layer_offset < 0 or layer_offset >= layers:
+        return 1
+
+    while current_dist < target_dist:
+        if side_dist_x < side_dist_y:
+            current_dist = side_dist_x
+            side_dist_x += delta_dist_x
+            map_x += step_x
+        else:
+            current_dist = side_dist_y
+            side_dist_y += delta_dist_y
+            map_y += step_y
+
+        if current_dist >= target_dist:
+            return 1
+            
+        if map_x < 0 or map_x >= w or map_y < 0 or map_y >= h:
+            continue
+
+        idx = (layer_offset * w * h) + (map_x * h) + map_y
+        
+        if flat_map[idx] > 0:
+            return 0 
+
+    return 1

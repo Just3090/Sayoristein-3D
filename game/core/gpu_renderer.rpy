@@ -61,6 +61,13 @@ init -50 python:
         
         move_out_array = (ctypes.c_double * 2)()
         move_out_ptr = ctypes.addressof(move_out_array)
+        @staticmethod
+        def check_line_of_sight(sx, sy, z, tx, ty, map_addr, w, h, layers, min_layer):
+            result = stein_lib.check_line_of_sight_c(
+                sx, sy, z, tx, ty,
+                map_addr, w, h, layers, min_layer
+            )
+            return result == 1
 
         @staticmethod
         def cast_ray_fast(*args):
@@ -111,7 +118,14 @@ init -50 python:
                 ctypes.c_void_p
             ]
             stein_lib.resolve_movement_c.restype = None
-            
+
+            stein_lib.check_line_of_sight_c.argtypes = [
+                ctypes.c_double, ctypes.c_double, ctypes.c_double, # Start X, Y, Z
+                ctypes.c_double, ctypes.c_double,                  # Target X, Y
+                ctypes.c_void_p,                                   # Map Pointer
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int # Map Data
+            ]
+            stein_lib.check_line_of_sight_c.restype = ctypes.c_int
             sys.modules["stein_core"] = SteinWrapper
             print(f"Sayoristein: Native motor loaded in {library_path}")
             USING_CYTHON = True
@@ -1526,26 +1540,18 @@ init -10 python:
             if not self.check_wall_collision(self.x, self.y + vy, radius): self.y += vy
 
         def has_line_of_sight(self, target_x, target_y):
-            ray_start_x, ray_start_y = self.x, self.y
-            ray_dir_x = target_x - ray_start_x; ray_dir_y = target_y - ray_start_y
-            ray_len = math.sqrt(ray_dir_x**2 + ray_dir_y**2)
-            if ray_len == 0: return True
-            ray_dir_x /= ray_len; ray_dir_y /= ray_len
-            if ray_dir_x == 0: ray_dir_x = 1e-9
-            if ray_dir_y == 0: ray_dir_y = 1e-9
-            delta_dist_x = abs(1 / ray_dir_x); delta_dist_y = abs(1 / ray_dir_y)
-            map_x, map_y = int(ray_start_x), int(ray_start_y)
-            if ray_dir_x < 0: step_x = -1; side_dist_x = (ray_start_x - map_x) * delta_dist_x
-            else: step_x = 1; side_dist_x = (map_x + 1.0 - ray_start_x) * delta_dist_x
-            if ray_dir_y < 0: step_y = -1; side_dist_y = (ray_start_y - map_y) * delta_dist_y
-            else: step_y = 1; side_dist_y = (map_y + 1.0 - ray_start_y) * delta_dist_y
+            map_address, _ = self.wm.flat_map_buffer.buffer_info()
             
-            current_dist = 0
-            while current_dist < ray_len:
-                if side_dist_x < side_dist_y: side_dist_x += delta_dist_x; map_x += step_x; current_dist = side_dist_x
-                else: side_dist_y += delta_dist_y; map_y += step_y; current_dist = side_dist_y
-                if self.wm.isBlocking(map_x, map_y): return False
-            return True
+            
+            check_z = self.wm.player.z + 0.5
+            
+            return stein_core.check_line_of_sight(
+                self.x, self.y, check_z,
+                target_x, target_y,
+                map_address,
+                self.wm.mapWidth, self.wm.mapHeight, 
+                self.wm.num_layers, self.wm.min_layer
+            )
 
     class Guard(BaseEnemy):
         def __init__(self, wm, x, y, texture_index, destroyed_texture_index, health=100):

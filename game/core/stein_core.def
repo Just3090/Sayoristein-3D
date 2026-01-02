@@ -2,3 +2,4 @@ LIBRARY stein_core
 EXPORTS
 cast_ray_c
 resolve_movement_c
+check_line_of_sight_c
