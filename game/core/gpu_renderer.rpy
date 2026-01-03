@@ -73,6 +73,7 @@ init -50 python:
             ("y", ctypes.c_double),
             ("z", ctypes.c_double),
             ("vel_z", ctypes.c_double),
+            ("rot", ctypes.c_double),
             ("is_grounded", ctypes.c_int),
             ("is_crouching", ctypes.c_int)
         ]
@@ -142,6 +143,15 @@ init -50 python:
         def resolve_movement(*args):
             stein_lib.resolve_movement_c(*args, SteinWrapper.move_out_ptr)
             return (SteinWrapper.move_out_array[0], SteinWrapper.move_out_array[1])
+
+        @staticmethod
+        def update_player_complete(player_addr, dt, speed, strafe, turn, move_speed, rot_speed, map_addr, w, h, layers, min_layer):
+            stein_lib.update_player_complete_c(
+                player_addr, dt, 
+                speed, strafe, turn, 
+                move_speed, rot_speed,
+                map_addr, w, h, layers, min_layer
+            )
 
     stein_lib = None
     library_path = None
@@ -239,6 +249,16 @@ init -50 python:
                 ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int # map dimensions
             ]
             stein_lib.update_player_physics_c.restype = None
+
+            stein_lib.update_player_complete_c.argtypes = [
+                ctypes.c_void_p,    # player_addr
+                ctypes.c_double,    # dt
+                ctypes.c_double, ctypes.c_double, ctypes.c_double, # inputs: speed, strafe, turn
+                ctypes.c_double, ctypes.c_double, # stats: move_speed, rot_speed
+                ctypes.c_void_p,    # map_addr
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int
+            ]
+            stein_lib.update_player_complete_c.restype = None
 
             SteinWrapper.stein_lib = stein_lib
 
@@ -1400,24 +1420,9 @@ init -10 python:
             p_data.y = self.y
             p_data.z = self.z
             p_data.vel_z = self.velocity_z
+            p_data.rot = self.rot
             p_data.is_grounded = 1 if self.is_grounded else 0
             p_data.is_crouching = 1 if self.is_crouching else 0
-
-            map_addr, _ = self.wm.flat_map_buffer.buffer_info()
-            
-            SteinWrapper.stein_lib.update_player_physics_c(
-                self.wm.player_ptr,
-                dt,
-                map_addr,
-                self.wm.mapWidth, self.wm.mapHeight, self.wm.num_layers, self.wm.min_layer
-            )
-
-            self.z = p_data.z
-            self.velocity_z = p_data.vel_z
-            self.is_grounded = (p_data.is_grounded == 1)
-            
-            if self.z < -10.0:
-                self.z = 10.0; self.velocity_z = 0.0
 
         def resolve_wall_collision(self, radius):
             if self.fly_mode: return
@@ -1439,35 +1444,50 @@ init -10 python:
         def move(self, dt):
             self.update_physics(dt)
 
-            moveStep = self.speed * self.moveSpeed * dt
-            strafeStep = self.strafe_speed * self.moveSpeed * dt
-            self.rot += self.dir * self.rotSpeed * dt
-            self.rot %= twoPI
-            self.planerot += self.dir * self.rotSpeed * dt
-            self.planerot %= twoPI
-            
-            vx = math.cos(self.rot) * moveStep + math.cos(self.planerot) * strafeStep
-            vy = math.sin(self.rot) * moveStep + math.sin(self.planerot) * strafeStep
-            
             if self.fly_mode:
+                moveStep = self.speed * self.moveSpeed * dt
+                strafeStep = self.strafe_speed * self.moveSpeed * dt
+                self.rot += self.dir * self.rotSpeed * dt
+                self.rot %= twoPI
+                
+                vx = math.cos(self.rot) * moveStep + math.cos(self.rot + 1.57) * strafeStep
+                vy = math.sin(self.rot) * moveStep + math.sin(self.rot + 1.57) * strafeStep
+                
                 self.x += vx
                 self.y += vy
             else:
+                # Use the new C implementation
                 map_address, _ = self.wm.flat_map_buffer.buffer_info()
                 
-                new_pos = stein_core.resolve_movement(
-                    self.x, self.y, self.z,
-                    vx, vy,
-                    0.3,
+                SteinWrapper.update_player_complete(
+                    self.wm.player_ptr,
+                    dt,
+                    float(self.speed),        # input_speed
+                    float(self.strafe_speed), # input_strafe
+                    float(self.dir),          # input_turn
+                    float(self.moveSpeed),
+                    float(self.rotSpeed),
                     map_address,
                     self.wm.mapWidth, self.wm.mapHeight,
                     self.wm.num_layers, self.wm.min_layer
                 )
-                self.x = new_pos[0]
-                self.y = new_pos[1]
+                
+                p_data = self.wm.player_data
+                self.x = p_data.x
+                self.y = p_data.y
+                self.z = p_data.z
+                self.velocity_z = p_data.vel_z
+                self.rot = p_data.rot
+                self.is_grounded = (p_data.is_grounded == 1)
+                
+                if self.z < -10.0:
+                    self.z = 10.0; self.velocity_z = 0.0
 
-            self.dirx = math.cos(self.rot); self.diry = math.sin(self.rot)
-            self.planex = math.cos(self.planerot); self.planey = math.sin(self.planerot)
+            self.dirx = math.cos(self.rot)
+            self.diry = math.sin(self.rot)
+            
+            self.planex = math.cos(self.rot - 1.5708) * 0.66 
+            self.planey = math.sin(self.rot - 1.5708) * 0.66
 
     class Projectile(object):
         def __init__(self, wm, x, y, dir_x, dir_y, texture_index, damage, fired_by_player=False, is_invisible=False, pitch=0.0):

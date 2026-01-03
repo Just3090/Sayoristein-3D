@@ -9,3 +9,4 @@ prepare_scene_sprites_c
 update_enemies_c
 check_hitscan_c
 update_player_physics_c
+update_player_complete_c

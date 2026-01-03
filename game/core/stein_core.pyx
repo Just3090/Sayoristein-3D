@@ -64,7 +64,7 @@ Build Instructions:
     You can see an example in game/core/notes.txt
 """
 
-from libc.math cimport floor, abs, sqrt
+from libc.math cimport floor, abs, sqrt, cos, sin
 from libc.stddef cimport size_t
 from libc.stdlib cimport qsort
 
@@ -585,8 +585,73 @@ cdef public int check_hitscan_c(
 cdef struct PlayerData:
     double x, y, z
     double vel_z
+    double rot
     int is_grounded
     int is_crouching
+
+cdef public void update_player_complete_c(
+    size_t player_addr,
+    double dt,
+    double input_speed,   # -1.0 to 1.0 (forward/back)
+    double input_strafe,  # -1.0 to 1.0 (left/right)
+    double input_turn,    # -1.0 to 1.0 (rotation)
+    double move_speed_val,
+    double rot_speed_val,
+    size_t flat_map_addr,
+    int w, int h, int layers, int min_layer
+):
+    cdef PlayerData* p = <PlayerData*>player_addr
+    cdef int* flat_map = <int*>flat_map_addr
+    
+    cdef double floor_h = _get_height_fast(<int>floor(p.x), <int>floor(p.y), <int>floor(p.z), w, h, layers, min_layer, flat_map)
+    cdef double GRAVITY = 35.0
+    
+    if p.is_grounded == 0:
+        p.vel_z -= GRAVITY * dt
+        p.z += p.vel_z * dt
+        if p.z <= floor_h:
+            p.z = floor_h
+            p.vel_z = 0.0
+            p.is_grounded = 1
+    else:
+        if p.z > (floor_h + 0.1):
+            p.is_grounded = 0
+
+    p.rot += input_turn * rot_speed_val * dt
+    
+    cdef double moveStep = input_speed * move_speed_val * dt
+    cdef double strafeStep = input_strafe * move_speed_val * dt
+    
+    cdef double cos_rot = cos(p.rot)
+    cdef double sin_rot = sin(p.rot)
+    
+    # vx = cos(rot) * move + cos(rot-90) * strafe
+    # cos(rot-90) = sin(rot), sin(rot-90) = -cos(rot)
+    cdef double vx = cos_rot * moveStep + sin_rot * strafeStep
+    cdef double vy = sin_rot * moveStep - cos_rot * strafeStep
+    
+    cdef double radius = 0.3
+    cdef double new_x = p.x + vx
+    cdef double new_y = p.y + vy
+    cdef int iz = <int>floor(p.z + 0.5)
+    
+    # X Axis Collision
+    if vx != 0:
+        if is_wall(<int>floor(new_x + (radius if vx > 0 else -radius)), <int>floor(p.y + radius), iz, w, h, layers, min_layer, flat_map) or \
+           is_wall(<int>floor(new_x + (radius if vx > 0 else -radius)), <int>floor(p.y - radius), iz, w, h, layers, min_layer, flat_map):
+            if vx > 0: new_x = floor(new_x + radius) - radius - 0.001
+            else:      new_x = floor(new_x - radius) + 1.0 + radius + 0.001
+    
+    p.x = new_x
+
+    # Y Axis Collision
+    if vy != 0:
+        if is_wall(<int>floor(p.x + radius), <int>floor(new_y + (radius if vy > 0 else -radius)), iz, w, h, layers, min_layer, flat_map) or \
+           is_wall(<int>floor(p.x - radius), <int>floor(new_y + (radius if vy > 0 else -radius)), iz, w, h, layers, min_layer, flat_map):
+            if vy > 0: new_y = floor(new_y + radius) - radius - 0.001
+            else:      new_y = floor(new_y - radius) + 1.0 + radius + 0.001
+
+    p.y = new_y
 
 cdef public void update_player_physics_c(
     size_t player_addr,
