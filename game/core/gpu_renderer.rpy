@@ -582,17 +582,7 @@ init -10 python:
                             break;
                         }
                     }
-                } else if (mapPos.z < 0) {
-                    if (mapPos.z == -1) {
-                        wallID = 9;
-                        hit = 1;
-                        break;
-                    }
                 }
-            } else if (mapPos.z == -1) {
-                wallID = 9;
-                hit = 1;
-                break;
             }
         }
 
@@ -601,63 +591,43 @@ init -10 python:
         if (hit == 1) {
             vec3 hitPos = rayPos + rayDir * rayDist;
             
-            if (side == 2 && mapPos.z == -1) {
-                if (u_simple_floor > 0.5) {
-                    color = vec3(0.25, 0.25, 0.28);
+            vec2 texUV;
+            if (wallID == 20) {
+                if (abs(hitNormal.x) > 0.5) {
+                    texUV = vec2(fract(hitPos.y), fract(hitPos.z * 2.0));
                 } else {
-                    vec2 floorUV = vec2(fract(hitPos.x), fract(hitPos.y));
-                    color = texture2D(u_floor_texture, floorUV, -1.0).rgb;
-                    color *= 0.6;
-                }
-
-                if (u_wetness > 0.0) {
-                    color *= (1.0 - u_wetness * 0.4);
-                }
-
-                if (u_rain_intensity > 0.0) {
-                    float r = ripple_layer(hitPos.xy, u_time);
-                    r += ripple_layer(hitPos.xy + vec2(0.5, 0.5), u_time + 0.5);
-                    color += vec3(r * 0.3 * u_rain_intensity);
+                    texUV = vec2(fract(hitPos.x), fract(hitPos.z * 2.0));
                 }
             } else {
-                vec2 texUV;
-                if (wallID == 20) {
-                    if (abs(hitNormal.x) > 0.5) {
-                        texUV = vec2(fract(hitPos.y), fract(hitPos.z * 2.0));
-                    } else {
-                        texUV = vec2(fract(hitPos.x), fract(hitPos.z * 2.0));
-                    }
-                } else {
-                    if (side == 0) { // X-Side
-                        float wallX = hitPos.y; 
-                        if (rayDir.x > 0.0) wallX = 1.0 - wallX;
-                        texUV = vec2(fract(wallX), fract(1.0 - hitPos.z));
-                    } 
-                    else if (side == 1) { // Y-Side
-                        float wallX = hitPos.x;
-                        if (rayDir.y < 0.0) wallX = 1.0 - wallX;
-                        texUV = vec2(fract(wallX), fract(1.0 - hitPos.z));
-                    }
-                    else { // Side 2 (Wall Top/Bottom)
-                        texUV = vec2(fract(hitPos.x), fract(hitPos.y));
-                    }
+                if (side == 0) { // X-Side
+                    float wallX = hitPos.y; 
+                    if (rayDir.x > 0.0) wallX = 1.0 - wallX;
+                    texUV = vec2(fract(wallX), fract(1.0 - hitPos.z));
+                } 
+                else if (side == 1) { // Y-Side
+                    float wallX = hitPos.x;
+                    if (rayDir.y < 0.0) wallX = 1.0 - wallX;
+                    texUV = vec2(fract(wallX), fract(1.0 - hitPos.z));
                 }
-                
-                float texRes = 64.0;
-                texUV = (floor(texUV * texRes) + 0.5) / texRes;
-                
-                float singleTexWidth = 1.0 / u_num_textures;
-                float texOffset = float(wallID - 1) * singleTexWidth;
-                
-                float clampedU = texUV.x * (1.0 - 0.002) + 0.001;
-                float finalU = texOffset + (clampedU * singleTexWidth);
-                float finalV = texUV.y;
-                
-                if (finalV < 0.0 || finalV > 1.0) {
-                    color = vec3(0.0);
-                } else {
-                    color = texture2D(u_wall_atlas, vec2(finalU, finalV), -4.0).rgb;
+                else { // Side 2 (Wall Top/Bottom)
+                    texUV = vec2(fract(hitPos.x), fract(hitPos.y));
                 }
+            }
+            
+            float texRes = 64.0;
+            texUV = (floor(texUV * texRes) + 0.5) / texRes;
+            
+            float singleTexWidth = 1.0 / u_num_textures;
+            float texOffset = float(wallID - 1) * singleTexWidth;
+            
+            float clampedU = texUV.x * (1.0 - 0.002) + 0.001;
+            float finalU = texOffset + (clampedU * singleTexWidth);
+            float finalV = texUV.y;
+            
+            if (finalV < 0.0 || finalV > 1.0) {
+                color = vec3(0.0);
+            } else {
+                color = texture2D(u_wall_atlas, vec2(finalU, finalV), 0.0).rgb;
             }
             
             vec3 finalColor = color;
@@ -1450,8 +1420,8 @@ init -10 python:
                 self.rot += self.dir * self.rotSpeed * dt
                 self.rot %= twoPI
                 
-                vx = math.cos(self.rot) * moveStep + math.cos(self.rot + 1.57) * strafeStep
-                vy = math.sin(self.rot) * moveStep + math.sin(self.rot + 1.57) * strafeStep
+                vx = math.cos(self.rot) * moveStep + math.sin(self.rot) * strafeStep
+                vy = math.sin(self.rot) * moveStep - math.cos(self.rot) * strafeStep
                 
                 self.x += vx
                 self.y += vy
@@ -1480,7 +1450,7 @@ init -10 python:
                 self.rot = p_data.rot
                 self.is_grounded = (p_data.is_grounded == 1)
                 
-                if self.z < -10.0:
+                if self.z < -25.0:
                     self.z = 10.0; self.velocity_z = 0.0
 
             self.dirx = math.cos(self.rot)
@@ -3459,7 +3429,6 @@ init -10 python:
                 mx, my, mz, side, sx, sy, sz = res[1:]
                 
                 if action == 'remove':
-                    if mz == -1: return
                     self.set_voxel(mx, my, mz, 0)
                 elif action == 'place':
                     nx, ny, nz = mx, my, mz
@@ -3470,6 +3439,12 @@ init -10 python:
                     if math.floor(self.player.x) == nx and math.floor(self.player.y) == ny and math.floor(self.player.z) == nz:
                         return
                     
+                    self.set_voxel(nx, ny, nz, self.selected_voxel)
+            else:
+                if action == 'place':
+                    nx = int(math.floor(self.player.x))
+                    ny = int(math.floor(self.player.y))
+                    nz = int(math.floor(self.player.z))
                     self.set_voxel(nx, ny, nz, self.selected_voxel)
 
         def shift_map(self, off_x, off_y):
@@ -3742,7 +3717,7 @@ init -10 python:
                 if ev.key == pygame.K_LCTRL or ev.key == pygame.K_RCTRL:
                     self.kb_running = True
 
-                if ev.key == pygame.K_LALT or ev.key == pygame.K_RALT:
+                if ev.key == pygame.K_n:
                     if self.player.fly_mode: self.kb_fly_down = True
 
             if ev.type == pygame.MOUSEBUTTONDOWN:
@@ -3781,7 +3756,7 @@ init -10 python:
                 if ev.key in (pygame.K_LCTRL, pygame.K_RCTRL): 
                     self.kb_running = False
                 
-                if ev.key in (pygame.K_LALT, pygame.K_RALT):
+                if ev.key == pygame.K_n:
                     self.kb_fly_down = False
 
         def poll_gamepad(self):

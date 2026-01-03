@@ -130,9 +130,6 @@ cdef public void cast_ray_c(
                 map_z += step_z
                 side = 2
         
-        if map_z == -1: 
-            hit = 1
-            break
         if map_x < 0 or map_x >= map_w or map_y < 0 or map_y >= map_h:
             continue
         
@@ -269,9 +266,9 @@ cdef public double get_map_height_c(
     cdef int iy = <int>floor(y)
     
     if ix < 0 or ix >= w or iy < 0 or iy >= h:
-        return 0.0
+        return -1000.0
         
-    cdef double max_z = 0.0
+    cdef double max_z = -1000.0
     cdef int l, idx, tile
     cdef double top_z
     cdef double block_height
@@ -302,8 +299,8 @@ cdef struct ProjectileData:
     int from_player
 
 cdef inline double _get_height_fast(int x, int y, int check_z, int w, int h, int layers, int min_layer, int* flat_map):
-    if x < 0 or x >= w or y < 0 or y >= h: return 0.0
-    cdef double max_z = 0.0
+    if x < 0 or x >= w or y < 0 or y >= h: return -1000.0
+    cdef double max_z = -1000.0
     cdef int l, idx, tile
     cdef double top_z, block_height
     
@@ -613,6 +610,11 @@ cdef public void update_player_complete_c(
             p.z = floor_h
             p.vel_z = 0.0
             p.is_grounded = 1
+        
+        if p.z < -25.0:
+            p.z = 10.0
+            p.vel_z = 0.0
+            p.is_grounded = 0
     else:
         if p.z > (floor_h + 0.1):
             p.is_grounded = 0
@@ -678,6 +680,11 @@ cdef public void update_player_physics_c(
             p.z = floor_height
             p.vel_z = 0.0
             p.is_grounded = 1
+            
+        if p.z < -25.0:
+            p.z = 10.0
+            p.vel_z = 0.0
+            p.is_grounded = 0
     else:
         if p.z > (floor_height + 0.1):
             p.is_grounded = 0

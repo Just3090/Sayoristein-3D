@@ -44,6 +44,11 @@ default persistent.stein_show_fps = True
 default persistent.stein_enable_bloom = True
 
 init python:
+    if 's' in config.keymap['screenshot']:
+        config.keymap['screenshot'].remove('s')
+    if 'alt_s' in config.keymap['screenshot']:
+        config.keymap['screenshot'].remove('alt_s')
+
     stein_lighting_presets = {
         "night": {
             'ambient_base': (0.02, 0.02, 0.05),
