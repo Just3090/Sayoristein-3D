@@ -52,6 +52,31 @@ init -50 python:
             ("step_x", ctypes.c_int), ("step_y", ctypes.c_int), ("step_z", ctypes.c_int)
         ]
 
+    class EnemyData(ctypes.Structure):
+        _fields_ = [
+            ("x", ctypes.c_double),
+            ("y", ctypes.c_double),
+            ("z", ctypes.c_double),
+            ("dir_x", ctypes.c_double),
+            ("dir_y", ctypes.c_double),
+            ("hp", ctypes.c_double),
+            ("state", ctypes.c_int),
+            ("texture_idx", ctypes.c_int),
+            ("timer", ctypes.c_double),
+            ("move_speed", ctypes.c_double),
+            ("enemy_type", ctypes.c_int)
+        ]
+
+    class PlayerData(ctypes.Structure):
+        _fields_ = [
+            ("x", ctypes.c_double),
+            ("y", ctypes.c_double),
+            ("z", ctypes.c_double),
+            ("vel_z", ctypes.c_double),
+            ("is_grounded", ctypes.c_int),
+            ("is_crouching", ctypes.c_int)
+        ]
+
     class MoveResult(ctypes.Structure):
         _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
 
@@ -186,6 +211,36 @@ init -50 python:
                 ctypes.c_void_p, ctypes.c_int
             ]
             stein_lib.prepare_scene_sprites_c.restype = ctypes.c_int
+
+            stein_lib.update_enemies_c.argtypes = [
+                ctypes.c_void_p,    # enemies_addr (pointer to array)
+                ctypes.c_int,       # count
+                ctypes.c_double, ctypes.c_double, ctypes.c_double, # player x, y, z
+                ctypes.c_double,    # dt
+                ctypes.c_void_p,    # flat_map_addr
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int # map dimensions
+            ]
+            stein_lib.update_enemies_c.restype = None
+
+            stein_lib.check_hitscan_c.argtypes = [
+                ctypes.c_double, ctypes.c_double, ctypes.c_double, # ray origin
+                ctypes.c_double, ctypes.c_double, ctypes.c_double, # ray dir
+                ctypes.c_void_p,    # enemies_addr
+                ctypes.c_int,       # count
+                ctypes.c_double,    # max_dist
+                ctypes.c_double     # damage
+            ]
+            stein_lib.check_hitscan_c.restype = ctypes.c_int # Returns index of hit enemy (-1 if none)
+
+            stein_lib.update_player_physics_c.argtypes = [
+                ctypes.c_void_p,    # player_addr (pointer to PlayerData struct)
+                ctypes.c_double,    # dt
+                ctypes.c_void_p,    # flat_map_addr
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int # map dimensions
+            ]
+            stein_lib.update_player_physics_c.restype = None
+
+            SteinWrapper.stein_lib = stein_lib
 
             sys.modules["stein_core"] = SteinWrapper
             print(f"Sayoristein: Native motor loaded in {library_path}")
@@ -1333,25 +1388,36 @@ init -10 python:
             if self.is_crouching:
                 self.crouch_timer -= dt
                 progress = 1.0 - (self.crouch_timer / self.crouch_duration)
-                self.z = floor_h + (self.CROUCH_DEPTH * math.sin(progress * math.pi))
+                target_z = floor_h + (self.CROUCH_DEPTH * math.sin(progress * math.pi))
+                self.z = target_z 
+                
                 if self.crouch_timer <= 0:
                     self.is_crouching = False; self.is_grounded = False; self.velocity_z = self.JUMP_FORCE
                     self.z = max(self.z, floor_h)
             
-            if self.is_grounded:
-                if self.z > floor_h + 0.1:
-                    self.is_grounded = False
-                else:
-                    self.z = floor_h
+            p_data = self.wm.player_data
+            p_data.x = self.x
+            p_data.y = self.y
+            p_data.z = self.z
+            p_data.vel_z = self.velocity_z
+            p_data.is_grounded = 1 if self.is_grounded else 0
+            p_data.is_crouching = 1 if self.is_crouching else 0
+
+            map_addr, _ = self.wm.flat_map_buffer.buffer_info()
             
-            if not self.is_grounded:
-                self.velocity_z -= self.GRAVITY * dt
-                self.z += self.velocity_z * dt
-                
-                # Check landing
-                current_floor = self.get_ground_height_at(self.x, self.y)
-                if self.z <= current_floor:
-                    self.z = current_floor; self.velocity_z = 0.0; self.is_grounded = True
+            SteinWrapper.stein_lib.update_player_physics_c(
+                self.wm.player_ptr,
+                dt,
+                map_addr,
+                self.wm.mapWidth, self.wm.mapHeight, self.wm.num_layers, self.wm.min_layer
+            )
+
+            self.z = p_data.z
+            self.velocity_z = p_data.vel_z
+            self.is_grounded = (p_data.is_grounded == 1)
+            
+            if self.z < -10.0:
+                self.z = 10.0; self.velocity_z = 0.0
 
         def resolve_wall_collision(self, radius):
             if self.fly_mode: return
@@ -2062,16 +2128,7 @@ init -10 python:
             renderer = renpy.render(self.base_displayable, width, height, st, at)
             renderer.add_shader("stein.raycaster")
 
-            enemy_count = 0
-            for i, e in enumerate(c.enemies):
-                if i >= 50: break
-                idx = i * 4
-                c.enemy_data_buffer[idx] = e.x
-                c.enemy_data_buffer[idx+1] = e.y
-                c.enemy_data_buffer[idx+2] = float(e.texture_index)
-                c.enemy_data_buffer[idx+3] = 0.0 # Pitch
-                enemy_count += 1
-                
+            
             static_count = 0
             for i, sp in enumerate(c.sprite_positions):
                 if i >= 50: break
@@ -2085,7 +2142,7 @@ init -10 python:
             active_sprites = SteinWrapper.prepare_scene_sprites(
                 c.player.x, c.player.y,
                 c.proj_ptr, c.MAX_PROJECTILES,
-                c.enemy_data_ptr, enemy_count,
+                c.enemy_ptr, len(c.enemies), # Use the main EnemyData* array
                 c.static_data_ptr, static_count,
                 c.shader_sprite_ptr, 64
             )
@@ -2441,6 +2498,14 @@ init -10 python:
 
             self.max_entities = 1024
             
+            self.max_enemies = 1024
+            self.enemy_array = (EnemyData * self.max_enemies)()
+            self.enemy_ptr = ctypes.addressof(self.enemy_array)
+            ctypes.memset(self.enemy_ptr, 0, ctypes.sizeof(self.enemy_array))
+
+            self.player_data = PlayerData()
+            self.player_ptr = ctypes.addressof(self.player_data)
+
             self.sort_buffer = (ctypes.c_int * self.max_entities)()
             
             self.shader_sprite_buffer = (ctypes.c_float * 256)()
@@ -3040,9 +3105,55 @@ init -10 python:
             self.update_weather(dt)
             self.hit_marker_timer = max(0, self.hit_marker_timer - dt)
             self.check_item_pickup()
-            for enemy in self.enemies: enemy.update(dt, self.player)
             
+            c_enemies = self.enemy_array
+            active_count = 0
+            state_map = {'idle': 0, 'chasing': 1, 'attacking': 2, 'dying': 3, 'dead': 4}
+
+            for i, e in enumerate(self.enemies):
+                if i >= self.max_enemies: break
+                c_enemies[i].x = e.x
+                c_enemies[i].y = e.y
+                c_enemies[i].z = getattr(e, 'z', 0.0) 
+                c_enemies[i].hp = e.health
+                c_enemies[i].state = state_map.get(e.state, 0)
+                c_enemies[i].texture_idx = e.texture_index
+                c_enemies[i].move_speed = e.moveSpeed
+                c_enemies[i].enemy_type = 0 
+                active_count += 1
+
             map_addr, _ = self.flat_map_buffer.buffer_info()
+            SteinWrapper.stein_lib.update_enemies_c(
+                self.enemy_ptr,
+                active_count,
+                self.player.x, self.player.y, self.player.z,
+                dt,
+                map_addr,
+                self.mapWidth, self.mapHeight, self.num_layers, self.min_layer
+            )
+
+            state_map_inv = {0: 'idle', 1: 'chasing', 2: 'attacking', 3: 'dying', 4: 'dead'}
+            
+            for i in range(active_count):
+                e = self.enemies[i]
+                c_e = c_enemies[i]
+                
+                e.x = c_e.x
+                e.y = c_e.y
+                e.health = c_e.hp
+                e.state = state_map_inv.get(c_e.state, 'idle')
+                
+                if c_e.state == 2 and e.attack_timer <= 0:
+                    pass
+
+                if e.state == 'attacking':
+                    if e.attack_timer <= 0:
+                        e.attack(self.player)
+
+            for e in self.enemies:
+                if e.attack_timer > 0:
+                    e.attack_timer -= dt
+            
             SteinWrapper.update_projectiles_native(
                 self.proj_ptr, self.MAX_PROJECTILES, dt,
                 map_addr, self.mapWidth, self.mapHeight, 
@@ -3166,55 +3277,51 @@ init -10 python:
                 self.spawn_projectile(self.player.x, self.player.y, z_start, dx, dy, dz, speed, self.bullet_texture_index, weapon.damage, True, pitch=pitch)
                 renpy.sound.play("sounds/gunshot.ogg", channel="audio")
             else:
-                hit = False
-                # Sort enemies to hit the closest one first
-                self.enemies.sort(key=lambda e: (e.x - self.player.x)**2 + (e.y - self.player.y)**2)
-                
-                for e in list(self.enemies):
-                    dist = math.sqrt((e.x - self.player.x)**2 + (e.y - self.player.y)**2)
-                    if dist < 1.5: 
-                        e_ground = self.player.get_ground_height_at(e.x, e.y, check_z=self.player.z)
-                        if abs(self.player.z - e_ground) < 1.0:
-                            taken = True
-                            if hasattr(e, 'take_damage'):
-                                taken = e.take_damage(weapon.damage)
-                            else:
-                                e.health -= weapon.damage
+                dir_z = -math.sin(self.player.pitch / float(self.height)) # Approximation
+                dir_z = (self.player.pitch / float(self.height)) 
 
-                            if taken:
-                                hit = True
-                                self.hit_marker_timer = 0.15
-                                
-                                if e.health <= 0:
-                                    renpy.sound.play("sounds/ow.ogg", channel="audio")
-                                    if self.is_arena_mode:
-                                        persistent.stein_kills += 1
-                                    
-                                    if e in self.enemies:
-                                        self.enemies.remove(e)
-                                    
-                                    self.sprite_positions.append((e.x, e.y, e.destroyed_texture_index))
-                                    
-                                    
-                                    # Arena Mode Drops
-                                    if self.is_arena_mode:
-                                        drop_prob = 1.0 if e.coin_index == 12 else 0.35
-                                        if renpy.random.random() < drop_prob:
-                                            self.sprite_positions.append((e.x, e.y, e.coin_index))
-                                        
-                                        if not renpy.store.stein_has_shotgun:
-                                            shotgun_prob = 0.25 if e.coin_index == 12 else 0.10
-                                            if renpy.random.random() < shotgun_prob:
-                                                self.sprite_positions.append((e.x, e.y, 13))
-                                                
-                                        if not renpy.store.stein_has_minigun:
-                                            if renpy.random.random() < 0.10:
-                                                self.sprite_positions.append((e.x, e.y, 15))
-                                
-                                break
+                hit_index = SteinWrapper.stein_lib.check_hitscan_c(
+                    self.player.x, self.player.y, self.player.z + 0.5,
+                    dx, dy, dir_z,
+                    self.enemy_ptr,
+                    len(self.enemies),
+                    100.0,
+                    float(weapon.damage)
+                )
 
-                if hit and not any(e.health <= 0 for e in self.enemies): 
-                    pass
+                if hit_index != -1:
+                    e = self.enemies[hit_index]
+                    
+                    c_enemies = self.enemy_array
+                    e.health = c_enemies[hit_index].hp
+                    
+                    self.hit_marker_timer = 0.15
+                    
+                    if e.health <= 0:
+                        renpy.sound.play("sounds/ow.ogg", channel="audio")
+                        if self.is_arena_mode:
+                            persistent.stein_kills += 1
+                        
+                        if e in self.enemies:
+                            self.enemies.remove(e)
+                        
+                        self.sprite_positions.append((e.x, e.y, e.destroyed_texture_index))
+                        
+                                    
+                        # Arena Mode Drops
+                        if self.is_arena_mode:
+                            drop_prob = 1.0 if e.coin_index == 12 else 0.35
+                            if renpy.random.random() < drop_prob:
+                                self.sprite_positions.append((e.x, e.y, e.coin_index))
+                            
+                            if not renpy.store.stein_has_shotgun:
+                                shotgun_prob = 0.25 if e.coin_index == 12 else 0.10
+                                if renpy.random.random() < shotgun_prob:
+                                    self.sprite_positions.append((e.x, e.y, 13))
+                                    
+                            if not renpy.store.stein_has_minigun:
+                                if renpy.random.random() < 0.10:
+                                    self.sprite_positions.append((e.x, e.y, 15))
 
         def add_damage_indicator(self, source_dir_x, source_dir_y):
             angle = math.atan2(source_dir_y, source_dir_x)

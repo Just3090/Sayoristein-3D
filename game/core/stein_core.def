@@ -6,3 +6,6 @@ check_line_of_sight_c
 get_map_height_c
 update_projectiles_c
 prepare_scene_sprites_c
+update_enemies_c
+check_hitscan_c
+update_player_physics_c

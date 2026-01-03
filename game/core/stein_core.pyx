@@ -375,18 +375,27 @@ cdef int compare_sprites(const void* a, const void* b) noexcept nogil:
     if sa.dist_sq > sb.dist_sq: return -1
     return 0
 
+cdef struct EnemyData:
+    double x, y, z
+    double dir_x, dir_y
+    double hp
+    int state           # 0=Idle, 1=Chasing, 2=Attacking, 3=Dying, 4=Dead
+    int texture_idx
+    double timer        # For attack cooldowns or state transitions
+    double move_speed
+    int enemy_type      # To distinguish behavior (Guard vs Yuritler)
+
 cdef public int prepare_scene_sprites_c(
     double player_x, double player_y,
     
     size_t proj_array_addr, int max_projs,
-    size_t enemies_in_addr, int num_enemies,
+    size_t enemies_struct_addr, int num_enemies,
     size_t static_in_addr, int num_statics,
     
     size_t output_buffer_addr, int max_sprites_shader
 ):
     cdef ProjectileData* projs = <ProjectileData*>proj_array_addr
-    
-    cdef double* enemies = <double*>enemies_in_addr
+    cdef EnemyData* enemies = <EnemyData*>enemies_struct_addr
     cdef double* statics = <double*>static_in_addr
     
     cdef float* out_buf = <float*>output_buffer_addr
@@ -410,14 +419,17 @@ cdef public int prepare_scene_sprites_c(
 
     for i in range(num_enemies):
         if count >= 128: break
-        k = i * 4
-        dx = enemies[k] - player_x
-        dy = enemies[k+1] - player_y
-        sort_buf[count].x = enemies[k]
-        sort_buf[count].y = enemies[k+1]
+        
+        if enemies[i].state == 4: 
+             pass
+
+        dx = enemies[i].x - player_x
+        dy = enemies[i].y - player_y
+        sort_buf[count].x = enemies[i].x
+        sort_buf[count].y = enemies[i].y
         sort_buf[count].dist_sq = dx*dx + dy*dy
-        sort_buf[count].texture_idx = <int>enemies[k+2]
-        sort_buf[count].pitch = enemies[k+3]
+        sort_buf[count].texture_idx = enemies[i].texture_idx
+        sort_buf[count].pitch = 0.0
         count += 1
 
     for i in range(num_statics):
@@ -448,3 +460,161 @@ cdef public int prepare_scene_sprites_c(
         out_buf[i] = 0.0
         
     return limit
+
+cdef inline double dist_sq(double x1, double y1, double x2, double y2):
+    return (x1 - x2)*(x1 - x2) + (y1 - y2)*(y1 - y2)
+
+cdef public void update_enemies_c(
+    size_t enemies_addr, 
+    int count, 
+    double player_x, double player_y, double player_z,
+    double dt,
+    size_t flat_map_addr, 
+    int w, int h, int layers, int min_layer
+):
+    """
+    Updates all enemy positions, logic, and states in a single C pass.
+    Handles basic pathfinding (move towards player) and wall collisions.
+    """
+    cdef EnemyData* enemies = <EnemyData*>enemies_addr
+    cdef int* flat_map = <int*>flat_map_addr
+    cdef int i
+    cdef double dx, dy, dist, dist_inv
+    cdef double next_x, next_y
+    cdef double attack_range = 15.0
+    
+    for i in range(count):
+        if enemies[i].state >= 4:
+            continue
+            
+        # Calculate vector to player
+        dx = player_x - enemies[i].x
+        dy = player_y - enemies[i].y
+        dist = sqrt(dx*dx + dy*dy)
+        
+        if enemies[i].state == 0: # Idle
+            if dist < attack_range:
+                enemies[i].state = 1 # Start Chasing
+                
+        elif enemies[i].state == 1: # Chasing
+            if dist <= attack_range:
+                enemies[i].state = 2 # Prepare Attack
+                enemies[i].timer = 1.0 # Attack delay
+            else:
+                # Normalize direction
+                if dist > 0:
+                    dist_inv = 1.0 / dist
+                    enemies[i].dir_x = dx * dist_inv
+                    enemies[i].dir_y = dy * dist_inv
+                
+                next_x = enemies[i].x + enemies[i].dir_x * enemies[i].move_speed * dt
+                next_y = enemies[i].y + enemies[i].dir_y * enemies[i].move_speed * dt
+                
+                if not is_wall(<int>floor(next_x + 0.3), <int>floor(enemies[i].y), <int>floor(enemies[i].z), w, h, layers, min_layer, flat_map) and \
+                   not is_wall(<int>floor(next_x - 0.3), <int>floor(enemies[i].y), <int>floor(enemies[i].z), w, h, layers, min_layer, flat_map):
+                    enemies[i].x = next_x
+                
+                # Check Y-axis movement
+                if not is_wall(<int>floor(enemies[i].x), <int>floor(next_y + 0.3), <int>floor(enemies[i].z), w, h, layers, min_layer, flat_map) and \
+                   not is_wall(<int>floor(enemies[i].x), <int>floor(next_y - 0.3), <int>floor(enemies[i].z), w, h, layers, min_layer, flat_map):
+                    enemies[i].y = next_y
+
+        elif enemies[i].state == 2: # Attacking
+            enemies[i].timer -= dt
+            if enemies[i].timer <= 0:
+                enemies[i].state = 1 # Return to chase
+
+cdef public int check_hitscan_c(
+    double ray_x, double ray_y, double ray_z,
+    double dir_x, double dir_y, double dir_z,
+    size_t enemies_addr,
+    int count,
+    double max_dist,
+    double damage
+):
+    """
+    Performs a raycast against the enemy bounding cylinders.
+    Returns: Index of the enemy hit, or -1 if none.
+    Side Effect: Applies damage directly to the struct in C memory.
+    """
+    cdef EnemyData* enemies = <EnemyData*>enemies_addr
+    cdef int i
+    cdef int best_idx = -1
+    cdef double closest_dist = max_dist
+    
+    cdef double ex, ey, ez
+    cdef double v_x, v_y
+    cdef double t_closest, proj, dist_to_line_sq
+    cdef double hit_z
+    cdef double enemy_radius = 0.35
+    cdef double enemy_height = 0.8
+    
+    for i in range(count):
+        if enemies[i].state >= 3: continue
+        
+        ex = enemies[i].x
+        ey = enemies[i].y
+        ez = enemies[i].z
+        
+        v_x = ex - ray_x
+        v_y = ey - ray_y
+        
+        t_closest = v_x * dir_x + v_y * dir_y
+        
+        if t_closest < 0 or t_closest > closest_dist:
+            continue
+            
+        # Distance squared from enemy center to the ray line
+        proj = t_closest
+        dist_to_line_sq = (v_x*v_x + v_y*v_y) - (proj*proj)
+        
+        if dist_to_line_sq < (enemy_radius * enemy_radius):
+            hit_z = ray_z + dir_z * t_closest
+            
+            if hit_z >= ez and hit_z <= (ez + enemy_height):
+                closest_dist = t_closest
+                best_idx = i
+
+    if best_idx != -1:
+        enemies[best_idx].hp -= damage
+        if enemies[best_idx].hp <= 0:
+            enemies[best_idx].state = 3 # Dying
+            
+    return best_idx
+
+cdef struct PlayerData:
+    double x, y, z
+    double vel_z
+    int is_grounded
+    int is_crouching
+
+cdef public void update_player_physics_c(
+    size_t player_addr,
+    double dt,
+    size_t flat_map_addr,
+    int w, int h, int layers, int min_layer
+):
+    """
+    Handles gravity, jumping integration, and floor detection.
+    """
+    cdef PlayerData* p = <PlayerData*>player_addr
+    cdef int* flat_map = <int*>flat_map_addr
+    
+    cdef double GRAVITY = 35.0
+    cdef double floor_height
+    
+    floor_height = _get_height_fast(<int>floor(p.x), <int>floor(p.y), <int>floor(p.z), w, h, layers, min_layer, flat_map)
+    
+    if p.is_grounded == 0:
+        p.vel_z -= GRAVITY * dt
+        p.z += p.vel_z * dt
+        
+        if p.z <= floor_height:
+            p.z = floor_height
+            p.vel_z = 0.0
+            p.is_grounded = 1
+    else:
+        if p.z > (floor_height + 0.1):
+            p.is_grounded = 0
+        else:
+            pass
