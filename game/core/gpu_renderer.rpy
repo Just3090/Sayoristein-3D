@@ -2666,11 +2666,11 @@ init -10 python:
 
         def create_wall_atlas(self):
             image_paths = [  
-                "pics/walls/eagle.webp", "pics/walls/redbrick.webp",
-                "pics/walls/purplestone.webp", "pics/walls/greystone.webp",
-                "pics/walls/bluestone.webp", "pics/walls/mossy.webp",
-                "pics/walls/wood.webp", "pics/walls/colorstone.webp",
-                "pics/walls/cement.webp",
+                "pics/walls/eagle.png", "pics/walls/redbrick.png",
+                "pics/walls/purplestone.png", "pics/walls/greystone.png",
+                "pics/walls/bluestone.png", "pics/walls/mossy.png",
+                "pics/walls/wood.png", "pics/walls/colorstone.png",
+                "pics/walls/cement.png",
             ]
             
             surfaces = []
@@ -2704,7 +2704,7 @@ init -10 python:
 
         def load_floor_texture(self):
             try:
-                with renpy.open_file("pics/walls/cement.webp") as f:
+                with renpy.open_file("pics/walls/cement.png") as f:
                     surf = pygame.image.load(f).convert_alpha()
                     surf = pygame.transform.scale(surf, (64, 64))
                     return renpy.display.draw.load_texture(surf)
