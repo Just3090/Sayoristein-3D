@@ -544,7 +544,7 @@ cdef public int check_hitscan_c(
     cdef double t_closest, proj, dist_to_line_sq
     cdef double hit_z
     cdef double enemy_radius = 0.35
-    cdef double enemy_height = 0.8
+    cdef double enemy_height = 1.8
     
     for i in range(count):
         if enemies[i].state >= 3: continue
@@ -636,11 +636,14 @@ cdef public void update_player_complete_c(
     cdef double new_x = p.x + vx
     cdef double new_y = p.y + vy
     cdef int iz = <int>floor(p.z + 0.5)
+    cdef int iz_head = <int>floor(p.z + 1.5)
     
     # X Axis Collision
     if vx != 0:
         if is_wall(<int>floor(new_x + (radius if vx > 0 else -radius)), <int>floor(p.y + radius), iz, w, h, layers, min_layer, flat_map) or \
-           is_wall(<int>floor(new_x + (radius if vx > 0 else -radius)), <int>floor(p.y - radius), iz, w, h, layers, min_layer, flat_map):
+           is_wall(<int>floor(new_x + (radius if vx > 0 else -radius)), <int>floor(p.y - radius), iz, w, h, layers, min_layer, flat_map) or \
+           is_wall(<int>floor(new_x + (radius if vx > 0 else -radius)), <int>floor(p.y + radius), iz_head, w, h, layers, min_layer, flat_map) or \
+           is_wall(<int>floor(new_x + (radius if vx > 0 else -radius)), <int>floor(p.y - radius), iz_head, w, h, layers, min_layer, flat_map):
             if vx > 0: new_x = floor(new_x + radius) - radius - 0.001
             else:      new_x = floor(new_x - radius) + 1.0 + radius + 0.001
     
@@ -649,7 +652,9 @@ cdef public void update_player_complete_c(
     # Y Axis Collision
     if vy != 0:
         if is_wall(<int>floor(p.x + radius), <int>floor(new_y + (radius if vy > 0 else -radius)), iz, w, h, layers, min_layer, flat_map) or \
-           is_wall(<int>floor(p.x - radius), <int>floor(new_y + (radius if vy > 0 else -radius)), iz, w, h, layers, min_layer, flat_map):
+           is_wall(<int>floor(p.x - radius), <int>floor(new_y + (radius if vy > 0 else -radius)), iz, w, h, layers, min_layer, flat_map) or \
+           is_wall(<int>floor(p.x + radius), <int>floor(new_y + (radius if vy > 0 else -radius)), iz_head, w, h, layers, min_layer, flat_map) or \
+           is_wall(<int>floor(p.x - radius), <int>floor(new_y + (radius if vy > 0 else -radius)), iz_head, w, h, layers, min_layer, flat_map):
             if vy > 0: new_y = floor(new_y + radius) - radius - 0.001
             else:      new_y = floor(new_y - radius) + 1.0 + radius + 0.001
 

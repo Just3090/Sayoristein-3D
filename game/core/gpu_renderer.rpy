@@ -476,8 +476,8 @@ init -10 python:
         vec2 stein_uv = v_tex_coord;
 
         // RAY GENERATION (3D)
-        // Player Position (Camera Origin). Z=0.5 is eye level + offsets
-        vec3 rayPos = vec3(u_player_pos.x, u_player_pos.y, 0.5 + u_z_offset);
+        // Player Position (Camera Origin). Z=1.6 is eye level + offsets
+        vec3 rayPos = vec3(u_player_pos.x, u_player_pos.y, 1.6 + u_z_offset);
         
         // Pitch Angle
         float pitchAngle = atan(u_pitch);
@@ -905,7 +905,7 @@ init -10 python:
             float transformY = invDet * (-u_player_plane.y * spX + u_player_plane.x * spY); 
             
             // Apply Pitch Rotation to Sprite Position
-            float camHeight = 0.5 + u_z_offset;
+            float camHeight = 1.6 + u_z_offset;
             float spriteZ = -camHeight;
             
             float rotY = transformY * cp + spriteZ * sp;
@@ -917,10 +917,22 @@ init -10 python:
 
             float spriteScreenX = (u_resolution.x / 2.0) * (1.0 + transformX / rotY);
             
-            // Scale sprites down
-            float spriteScale = 0.55; 
-            float spriteHeight = abs(u_resolution.y / rotY) * u_vertical_scale * spriteScale; 
-            float spriteWidth = spriteHeight; 
+            // Scale sprites
+            // scaleY = World Height in blocks
+            // scaleX = World Width in blocks
+            
+            float scaleY = 1.0;
+            float scaleX = 1.0;
+            
+            if (texID < 0.5) { scaleY = 0.9; scaleX = 0.7; }
+            else if (texID < 3.5) { scaleY = 2.0; scaleX = 1.0; }
+            else if (texID < 5.5) { scaleY = 1.0; scaleX = 0.5; }
+            else if (texID < 8.5) { scaleY = 0.4; scaleX = 0.4; }
+            else if (texID < 10.5) { scaleY = 1.2; scaleX = 0.6; }
+            else { scaleY = 0.5; scaleX = 0.5; }
+
+            float spriteHeight = abs(u_resolution.y / rotY) * u_vertical_scale * scaleY; 
+            float spriteWidth = abs(u_resolution.y / rotY) * u_vertical_scale * scaleX; 
 
             // Sprite Anchoring Logic (Floor Alignment)
             // Calculate Screen Y of the floor (rotZ)
@@ -1474,7 +1486,7 @@ init -10 python:
             
             if self.fired_by_player:
                 self.speed = 100.0 
-                self.z = self.wm.player.z + 0.5
+                self.z = self.wm.player.z + 1.5
                 self.dir_z = (pitch / float(self.wm.height))
             else:
                 self.speed = 12.0
@@ -1483,7 +1495,7 @@ init -10 python:
                 
                 p_x = self.wm.player.x
                 p_y = self.wm.player.y
-                p_z = self.wm.player.z + 0.3
+                p_z = self.wm.player.z + 1.0
                 
                 dist_2d = math.sqrt((p_x - x)**2 + (p_y - y)**2)
                 if dist_2d > 0:
@@ -1642,7 +1654,7 @@ init -10 python:
             map_address, _ = self.wm.flat_map_buffer.buffer_info()
             
             
-            check_z = self.wm.player.z + 0.5
+            check_z = self.wm.player.z + 1.6
             
             return stein_core.check_line_of_sight(
                 self.x, self.y, check_z,
@@ -1670,7 +1682,7 @@ init -10 python:
                 dir_y /= dist
             
             self.wm.spawn_projectile(
-                self.x, self.y, self.wm.player.z + 0.5, 
+                self.x, self.y, self.wm.player.z + 1.0, 
                 dir_x, dir_y, 0.0,
                 12.0, 
                 self.bullet_texture_index, 
@@ -1699,7 +1711,7 @@ init -10 python:
                     p_diry = math.sin(base_angle + offset)
                     
                     self.wm.spawn_projectile(
-                        self.x, self.y, self.wm.player.z + 0.5,
+                        self.x, self.y, self.wm.player.z + 1.0,
                         p_dirx, p_diry, 0.0,
                         12.0,
                         self.bullet_texture_index, 
@@ -1729,7 +1741,7 @@ init -10 python:
             dist = math.sqrt(dir_x**2 + dir_y**2)
             if dist > 0: dir_x /= dist; dir_y /= dist
             
-            self.wm.spawn_projectile(self.x, self.y, self.wm.player.z + 0.5, dir_x, dir_y, 0.0, 12.0, self.bullet_texture_index, self.damage, False)
+            self.wm.spawn_projectile(self.x, self.y, self.wm.player.z + 1.0, dir_x, dir_y, 0.0, 12.0, self.bullet_texture_index, self.damage, False)
             
             renpy.sound.play("sounds/e-gunshot.ogg", channel="audio")
             self.shots_fired_in_burst += 1
@@ -2735,11 +2747,11 @@ init -10 python:
             for path in sprite_paths:
                 with renpy.open_file(path) as f:
                     surf = pygame.image.load(f).convert_alpha()
-                    surf = pygame.transform.scale(surf, (64, 64))
+                    surf = pygame.transform.scale(surf, (64, 128))
                     surfaces.append(surf)
             
             if not surfaces:
-                fallback = pygame.Surface((64, 64)); fallback.fill((0,255,0))
+                fallback = pygame.Surface((64, 128)); fallback.fill((0,255,0))
                 return renpy.display.draw.load_texture(fallback), 1.0
 
             num_tex = len(surfaces)
@@ -3271,7 +3283,7 @@ init -10 python:
                 dir_z = (self.player.pitch / float(self.height)) 
 
                 hit_index = SteinWrapper.stein_lib.check_hitscan_c(
-                    self.player.x, self.player.y, self.player.z + 0.5,
+                    self.player.x, self.player.y, self.player.z + 1.6,
                     dx, dy, dir_z,
                     self.enemy_ptr,
                     len(self.enemies),
@@ -3423,7 +3435,7 @@ init -10 python:
                 rdy /= rlen
                 rdz /= rlen
             
-            res = self.cast_ray(self.player.x, self.player.y, self.player.z + 0.5, rdx, rdy, rdz, max_dist=100.0)
+            res = self.cast_ray(self.player.x, self.player.y, self.player.z + 1.6, rdx, rdy, rdz, max_dist=100.0)
             
             if res[0]: 
                 mx, my, mz, side, sx, sy, sz = res[1:]
