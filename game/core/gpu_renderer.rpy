@@ -90,7 +90,8 @@ init -50 python:
             ("texture_idx", ctypes.c_int),
             ("pitch", ctypes.c_double),
             ("damage", ctypes.c_int),
-            ("from_player", ctypes.c_int)  # 1/0
+            ("from_player", ctypes.c_int), # 1/0
+            ("hit_target", ctypes.c_int)   # -1=None, -2=Player, >=0 EnemyIndex
         ]
 
     class SteinWrapper:
@@ -101,9 +102,12 @@ init -50 python:
         move_out_ptr = ctypes.addressof(move_out_array)
 
         @staticmethod
-        def update_projectiles_native(proj_addr, count, dt, map_addr, w, h, layers, min_layer):
+        def update_projectiles_native(proj_addr, count, enemy_ptr, num_enemies, player_ptr, dt, map_addr, w, h, layers, min_layer):
             stein_lib.update_projectiles_c(
-                proj_addr, count, dt, 
+                proj_addr, count, 
+                enemy_ptr, num_enemies,
+                player_ptr,
+                dt, 
                 map_addr, w, h, layers, min_layer
             )
 
@@ -207,7 +211,10 @@ init -50 python:
             stein_lib.get_map_height_c.restype = ctypes.c_double
 
             stein_lib.update_projectiles_c.argtypes = [
-                ctypes.c_void_p, ctypes.c_int, ctypes.c_double, # array, count, dt
+                ctypes.c_void_p, ctypes.c_int,                  # array, count
+                ctypes.c_void_p, ctypes.c_int,                  # enemies, num
+                ctypes.c_void_p,                                # player
+                ctypes.c_double,                                # dt
                 ctypes.c_void_p,                                # map_ptr
                 ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int
             ]
@@ -2531,6 +2538,7 @@ init -10 python:
             
             for i in range(self.MAX_PROJECTILES):
                 self.proj_array[i].active = 0
+                self.proj_array[i].hit_target = -1
 
             self.projectiles = []
             self.enemies = []
@@ -2570,6 +2578,7 @@ init -10 python:
                     p.from_player = 1 if is_player else 0
                     p.pitch = pitch
                     p.active = 1
+                    p.hit_target = -1
                     return
 
         def equip_weapon(self, weapon_name):
@@ -3116,7 +3125,16 @@ init -10 python:
                 if i >= self.max_enemies: break
                 c_enemies[i].x = e.x
                 c_enemies[i].y = e.y
-                c_enemies[i].z = getattr(e, 'z', 0.0) 
+                
+                # Update Z from floor if not present on python object
+                ground_z = self.player.get_ground_height_at(e.x, e.y)
+                if not hasattr(e, 'z'):
+                    e.z = ground_z
+                else:
+                    e.z = ground_z
+
+                c_enemies[i].z = e.z
+
                 c_enemies[i].hp = e.health
                 c_enemies[i].state = state_map.get(e.state, 0)
                 c_enemies[i].texture_idx = e.texture_index
@@ -3157,43 +3175,66 @@ init -10 python:
                     e.attack_timer -= dt
             
             SteinWrapper.update_projectiles_native(
-                self.proj_ptr, self.MAX_PROJECTILES, dt,
+                self.proj_ptr, self.MAX_PROJECTILES, 
+                self.enemy_ptr, active_count,
+                self.player_ptr,
+                dt,
                 map_addr, self.mapWidth, self.mapHeight, 
                 self.num_layers, self.min_layer
             )
 
+            dead_enemies = set()
+
             for i in range(self.MAX_PROJECTILES):
                 p = self.proj_array[i]
-                if p.active == 0: continue
                 
-                if p.from_player == 1:
-                    for e in list(self.enemies):
-                        dist_sq = (e.x - p.x)**2 + (e.y - p.y)**2
-                        if dist_sq < 0.25:
-                            e.health -= p.damage
+                if p.hit_target != -1:
+                    if p.hit_target == -2:
+                        # Player Hit
+                        if not self.builder_mode:
+                            self.player.health -= p.damage
+                            self.add_damage_indicator(-p.dir_x, -p.dir_y)
+                            self.damage_flash_timer = 0.2
+                            self.time_since_last_damage = 0.0
+                            renpy.sound.play("sounds/ow.ogg", channel="audio")
+                    
+                    elif p.hit_target >= 0:
+                        # Enemy Hit
+                        if p.hit_target < len(self.enemies):
+                            e = self.enemies[p.hit_target]
+                            
                             self.hit_marker_timer = 0.15
                             renpy.sound.play("sounds/ow.ogg", channel="audio")
-                            p.active = 0 
+
+                            taken = True
+                            if hasattr(e, 'take_damage'): 
+                                taken = e.take_damage(p.damage)
+                            else:
+                                e.health -= p.damage
                             
                             if e.health <= 0:
-                                if e in self.enemies: self.enemies.remove(e)
-                                self.sprite_positions.append((e.x, e.y, e.destroyed_texture_index))
-                            break 
-                else:
-                    dx = self.player.x - p.x
-                    dy = self.player.y - p.y
-                    dist_sq = dx*dx + dy*dy
+                                dead_enemies.add(e)
                     
-                    if dist_sq < 0.25:
-                        # Check Z height
-                        if p.z >= self.player.z and p.z <= self.player.z + 1.0:
-                            if not self.builder_mode:
-                                self.player.health -= p.damage
-                                self.add_damage_indicator(-p.dir_x, -p.dir_y)
-                                self.damage_flash_timer = 0.2
-                                self.time_since_last_damage = 0.0
-                                renpy.sound.play("sounds/ow.ogg", channel="audio")
-                            p.active = 0
+                    p.hit_target = -1
+
+            for e in dead_enemies:
+                if e in self.enemies:
+                    self.enemies.remove(e)
+                self.sprite_positions.append((e.x, e.y, e.destroyed_texture_index))
+
+                if self.is_arena_mode:
+                    drop_prob = 1.0 if e.coin_index == 12 else 0.35
+                    if renpy.random.random() < drop_prob:
+                        self.sprite_positions.append((e.x, e.y, e.coin_index))
+                    
+                    if not renpy.store.stein_has_shotgun:
+                        shotgun_prob = 0.25 if e.coin_index == 12 else 0.10
+                        if renpy.random.random() < shotgun_prob:
+                            self.sprite_positions.append((e.x, e.y, 13))
+                            
+                    if not renpy.store.stein_has_minigun:
+                        if renpy.random.random() < 0.10:
+                            self.sprite_positions.append((e.x, e.y, 15))
 
             if self.mouse_firing or self.gp_firing: self.shoot_weapon()
 

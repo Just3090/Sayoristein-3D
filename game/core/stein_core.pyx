@@ -297,6 +297,24 @@ cdef struct ProjectileData:
     double pitch
     int damage
     int from_player
+    int hit_target
+
+cdef struct EnemyData:
+    double x, y, z
+    double dir_x, dir_y
+    double hp
+    int state           # 0=Idle, 1=Chasing, 2=Attacking, 3=Dying, 4=Dead
+    int texture_idx
+    double timer        # For attack cooldowns or state transitions
+    double move_speed
+    int enemy_type      # To distinguish behavior (Guard vs Yuritler)
+
+cdef struct PlayerData:
+    double x, y, z
+    double vel_z
+    double rot
+    int is_grounded
+    int is_crouching
 
 cdef inline double _get_height_fast(int x, int y, int check_z, int w, int h, int layers, int min_layer, int* flat_map):
     if x < 0 or x >= w or y < 0 or y >= h: return -1000.0
@@ -317,21 +335,38 @@ cdef inline double _get_height_fast(int x, int y, int check_z, int w, int h, int
 cdef public void update_projectiles_c(
     size_t proj_array_addr,
     int count,
+    size_t enemies_addr,
+    int num_enemies,
+    size_t player_addr,
     double dt,
     size_t flat_map_addr,
     int w, int h, int layers, int min_layer
 ):
     cdef ProjectileData* projs = <ProjectileData*>proj_array_addr
+    cdef EnemyData* enemies = <EnemyData*>enemies_addr
+    cdef PlayerData* player = <PlayerData*>player_addr
     cdef int* flat_map = <int*>flat_map_addr
-    cdef int i
+    
+    cdef int i, j
     cdef double dist_to_travel, traveled, step_dist
     cdef double next_x, next_y, next_z
     cdef double floor_h
     cdef double STEP_SIZE = 0.4
+    
+    cdef double dx, dy
+    cdef double enemy_radius = 0.35
+    cdef double enemy_height = 1.8
+    cdef double player_radius = 0.3
+    cdef double player_height = 1.6
+    
+    cdef double e_x, e_y, e_z
 
     for i in range(count):
         if projs[i].active == 0:
             continue
+        
+        # Reset hit code for this frame
+        projs[i].hit_target = -1
 
         dist_to_travel = projs[i].speed * dt
         traveled = 0.0
@@ -344,11 +379,48 @@ cdef public void update_projectiles_c(
             next_x = projs[i].x + projs[i].dir_x * step_dist
             next_y = projs[i].y + projs[i].dir_y * step_dist
             next_z = projs[i].z + projs[i].dir_z * step_dist
+            
+            # Entity Collision
+            if projs[i].from_player == 1:
+                # Check vs Enemies
+                for j in range(num_enemies):
+                    if enemies[j].state >= 3: continue # Dying or Dead
+                    
+                    e_x = enemies[j].x
+                    e_y = enemies[j].y
+                    e_z = enemies[j].z 
+                    
+                    # More forgiving Z check
+                    if next_z >= (e_z - 0.5) and next_z <= (e_z + enemy_height + 0.2):
+                        dx = next_x - e_x
+                        dy = next_y - e_y
+                        if (dx*dx + dy*dy) < (enemy_radius * enemy_radius):
+                            # Hit
+                            projs[i].hit_target = j
+                            projs[i].active = 0
+                            break
+                            
+                if projs[i].active == 0: break 
 
+            else:
+                # Check vs Player
+                if next_z >= (player.z - 0.2) and next_z <= (player.z + player_height + 0.2):
+                    dx = next_x - player.x
+                    dy = next_y - player.y
+                    if (dx*dx + dy*dy) < (player_radius * player_radius):
+                        # Hit Player (Code -2)
+                        projs[i].hit_target = -2
+                        projs[i].active = 0
+                        break
+                        
+                if projs[i].active == 0: break
+
+            # Wall Collision
             if is_wall(<int>floor(next_x), <int>floor(next_y), <int>floor(next_z), w, h, layers, min_layer, flat_map):
                 projs[i].active = 0
                 break
 
+            # Floor Collision
             floor_h = _get_height_fast(<int>floor(next_x), <int>floor(next_y), <int>floor(next_z), w, h, layers, min_layer, flat_map)
             if next_z < floor_h:
                 projs[i].active = 0
@@ -371,16 +443,6 @@ cdef int compare_sprites(const void* a, const void* b) noexcept nogil:
     if sa.dist_sq < sb.dist_sq: return 1
     if sa.dist_sq > sb.dist_sq: return -1
     return 0
-
-cdef struct EnemyData:
-    double x, y, z
-    double dir_x, dir_y
-    double hp
-    int state           # 0=Idle, 1=Chasing, 2=Attacking, 3=Dying, 4=Dead
-    int texture_idx
-    double timer        # For attack cooldowns or state transitions
-    double move_speed
-    int enemy_type      # To distinguish behavior (Guard vs Yuritler)
 
 cdef public int prepare_scene_sprites_c(
     double player_x, double player_y,
@@ -578,13 +640,6 @@ cdef public int check_hitscan_c(
             enemies[best_idx].state = 3 # Dying
             
     return best_idx
-
-cdef struct PlayerData:
-    double x, y, z
-    double vel_z
-    double rot
-    int is_grounded
-    int is_crouching
 
 cdef public void update_player_complete_c(
     size_t player_addr,
