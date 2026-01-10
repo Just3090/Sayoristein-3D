@@ -3772,32 +3772,11 @@ init -10 python:
             )
 
         def handle_builder_action(self, action):
-            u_pitch = self.player.pitch / float(self.height)
-            pitch_angle = math.atan(u_pitch)
+            rdx = self.player.dirx
+            rdy = self.player.diry
             
-            cp = math.cos(pitch_angle)
-            sp = math.sin(pitch_angle)
-            
-            px = self.player.planex
-            py = self.player.planey
-            plen = math.sqrt(px*px + py*py)
-            if plen == 0: plen = 1.0
-            rx = px / plen
-            ry = py / plen
-            
-            bx = self.player.dirx
-            by = self.player.diry
-            
-            cz = rx*by - ry*bx
-            dot_rb = rx*bx + ry*by
-            
-            rdx = bx * cp + 0.0 * sp + rx * dot_rb * (1.0 - cp)
-            rdy = by * cp + 0.0 * sp + ry * dot_rb * (1.0 - cp)
-            rdz = 0.0 * cp + cz * sp + 0.0 * dot_rb * (1.0 - cp)
-            
-            rdx = bx * cp + 0.0 + rx * dot_rb * (1.0 - cp)
-            rdy = by * cp + 0.0 + ry * dot_rb * (1.0 - cp)
-            rdz = 0.0 + cz * sp + 0.0
+            h_div = float(self.internal_height) if self.internal_height else float(self.height)
+            rdz = self.player.pitch / h_div
             
             # Normalize
             rlen = math.sqrt(rdx*rdx + rdy*rdy + rdz*rdz)
