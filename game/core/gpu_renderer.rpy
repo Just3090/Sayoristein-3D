@@ -2277,7 +2277,7 @@ init -10 python:
             self.map_data = worldMap
             self.worldMap = worldMap 
             
-            if isinstance(worldMap, dict):
+            if isinstance(worldMap, dict) or hasattr(worldMap, 'items'):
                 max_x = 0
                 max_y = 0
                 for grid in worldMap.values():
@@ -2286,8 +2286,13 @@ init -10 python:
                 self.mapWidth = max_x
                 self.mapHeight = max_y
             else:
-                self.mapWidth = len(worldMap)
-                self.mapHeight = len(worldMap[0]) if self.mapWidth > 0 else 0
+                s_mapWidth = len(worldMap)
+                if s_mapWidth > 0:
+                    self.mapWidth = s_mapWidth
+                    self.mapHeight = len(worldMap[0])
+                else:
+                    self.mapWidth = 0
+                    self.mapHeight = 0
             
             self.map_w = self.mapWidth
             self.map_h = self.mapHeight
@@ -2785,8 +2790,15 @@ init -10 python:
             if isinstance(self.map_data, list):
                 layers = {0: self.map_data}
             else:
-                layers = self.map_data
-
+                layers = {}
+                for k, v in self.map_data.items():
+                    try:
+                        layers[int(k)] = v
+                    except (ValueError, TypeError):
+                        print(f"GPURenpystein Warning: ignored non-integer layer key '{k}'")
+            
+            self.worldMap = layers 
+                
             # Find max dimensions
             max_x = 0
             max_y = 0
@@ -2807,7 +2819,7 @@ init -10 python:
             self.num_layers = max_z - min_z + 1
 
             self.flat_map_buffer = flatten_world_map(
-                self.worldMap, self.mapWidth, self.mapHeight, 
+                self.worldMap, self.map_w, self.map_h, 
                 self.min_layer, self.max_layer
             )
             
@@ -3720,22 +3732,8 @@ init -10 python:
                             self.pickup_msg_timer = 2.0
 
                     if ev.key == pygame.K_p:
-                        print("--- LEVEL DATA START ---")
-                        if isinstance(self.worldMap, dict):
-                            print("{")
-                            for z in sorted(self.worldMap.keys()):
-                                print(f"    {z}: [")
-                                for row in self.worldMap[z]:
-                                    print(f"        {repr(row)},")
-                                print("    ],")
-                            print("}")
-                        else:
-                            print("[")
-                            for row in self.worldMap:
-                                print(f"    {repr(row)},")
-                            print("]")
-                        print("--- LEVEL DATA END ---")
-                        self.pickup_msg = "LEVEL DATA PRINTED"
+                        renpy.store.save_level_json(self.worldMap)
+                        self.pickup_msg = "LEVEL DATA SAVED"
                         self.pickup_msg_timer = 2.0
 
                 if ev.key == pygame.K_ESCAPE:
