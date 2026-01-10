@@ -357,6 +357,10 @@ init -10 python:
         uniform float u_num_sprite_textures;
         uniform vec4 u_sprites[64]; // x, y, texture_id, pitch_offset
         uniform int u_num_active_sprites;
+        uniform vec4 u_objects[128]; // xyz=pos, w=model_id
+        uniform float u_num_objects;
+        uniform sampler2D u_model_atlas;
+        uniform float u_num_models;
         uniform float u_flash_intensity;
         uniform vec4 u_light_positions[16];
         uniform float u_num_active_lights;
@@ -442,6 +446,16 @@ init -10 python:
             float beam = smoothstep(0.4, 0.5, fract(st.x)) * smoothstep(0.6, 0.5, fract(st.x));
             
             return drop * beam;
+        }
+
+        float intersectAABB(vec3 rayOrigin, vec3 rayDir, vec3 boxMin, vec3 boxMax, out float tFar) {
+            vec3 tMin = (boxMin - rayOrigin) / rayDir;
+            vec3 tMax = (boxMax - rayOrigin) / rayDir;
+            vec3 t1 = min(tMin, tMax);
+            vec3 t2 = max(tMin, tMax);
+            float tNear = max(max(t1.x, t1.y), t1.z);
+            tFar = min(min(t2.x, t2.y), t2.z);
+            return tNear;
         }
 
         float intersectPyramid(vec3 ro, vec3 rd, out vec3 outNormal) {
@@ -592,14 +606,136 @@ init -10 python:
                 }
             }
         }
+        
+        // Object rendering
+        float objDist = rayDist;
+        if (hit == 0 || hit == 2) objDist = u_max_dist; // If no wall hit, max distance
+        
+        int objHit = 0;
+        int objModelHitID = -1;
+        vec3 objHitNormal = vec3(0.0);
+        vec3 hitObjPos = vec3(0.0); 
+        int objVoxelID = 0;
+        
+        for (int i=0; i<128; i++) {
+            if (float(i) >= u_num_objects) break;
+            
+            vec3 objPos = u_objects[i].xyz;
+            float modelID = u_objects[i].w;
+            if (modelID < 0.0) continue;
+            
+            float tFarBox;
+            float tNearBox = intersectAABB(rayPos, rayDir, objPos, objPos + vec3(1.0), tFarBox);
+            
+            if (tNearBox < tFarBox && tFarBox > 0.0 && tNearBox < objDist) {
+                float tStart = max(0.0, tNearBox);
+                
+                vec3 enterPos = rayPos + rayDir * tStart - objPos;
+                
+                // Scale up by 6.0 (Grid 6x6x6)
+                vec3 localPos = enterPos * 6.0;
+                vec3 localDir = rayDir; 
+                
+                // Local DDA
+                ivec3 lMapPos = ivec3(floor(localPos));
+                vec3 lDeltaDist = abs(1.0 / localDir);
+                ivec3 lStepDir;
+                vec3 lSideDist;
+                
+                if (localDir.x < 0.0) { lStepDir.x = -1; lSideDist.x = (localPos.x - float(lMapPos.x)) * lDeltaDist.x; }
+                else                  { lStepDir.x = 1;  lSideDist.x = (float(lMapPos.x) + 1.0 - localPos.x) * lDeltaDist.x; }
+                if (localDir.y < 0.0) { lStepDir.y = -1; lSideDist.y = (localPos.y - float(lMapPos.y)) * lDeltaDist.y; }
+                else                  { lStepDir.y = 1;  lSideDist.y = (float(lMapPos.y) + 1.0 - localPos.y) * lDeltaDist.y; }
+                if (localDir.z < 0.0) { lStepDir.z = -1; lSideDist.z = (localPos.z - float(lMapPos.z)) * lDeltaDist.z; }
+                else                  { lStepDir.z = 1;  lSideDist.z = (float(lMapPos.z) + 1.0 - localPos.z) * lDeltaDist.z; }
+                
+                int lHit = 0;
+                int lSide = 0;
+                
+                // Max steps for 6x6x6 is 18 (diagonal), use 24 safely
+                for(int j=0; j<24; j++) {
+                    if (lSideDist.x < lSideDist.y) {
+                        if (lSideDist.x < lSideDist.z) {
+                            lSideDist.x += lDeltaDist.x; lMapPos.x += lStepDir.x; lSide=0;
+                        } else {
+                            lSideDist.z += lDeltaDist.z; lMapPos.z += lStepDir.z; lSide=2;
+                        }
+                    } else {
+                        if (lSideDist.y < lSideDist.z) {
+                            lSideDist.y += lDeltaDist.y; lMapPos.y += lStepDir.y; lSide=1;
+                        } else {
+                            lSideDist.z += lDeltaDist.z; lMapPos.z += lStepDir.z; lSide=2;
+                        }
+                    }
+                    
+                    if (lMapPos.x < 0 || lMapPos.x > 5 || lMapPos.y < 0 || lMapPos.y > 5 || lMapPos.z < 0 || lMapPos.z > 5) break;
+                    
+                    float tu = (float(lMapPos.z) * 6.0 + float(lMapPos.x) + 0.5) / 36.0;
+                    float tv = (modelID * 6.0 + float(lMapPos.y) + 0.5) / (6.0 * max(1.0, u_num_models));
+                    
+                    vec4 val = texture2D(u_model_atlas, vec2(tu, tv));
+                    if (val.g > 0.0) { 
+                            lHit = 1;
+                            objVoxelID = int(val.g * 255.0 + 0.5);
+                            break; 
+                    }
+                }
+                
+                if (lHit == 1) {
+                        float distInBox = 0.0;
+                        if (lSide == 0) distInBox = (lSideDist.x - lDeltaDist.x) / 6.0;
+                        else if (lSide == 1) distInBox = (lSideDist.y - lDeltaDist.y) / 6.0;
+                        else distInBox = (lSideDist.z - lDeltaDist.z) / 6.0;
+                        
+                        float totalDist = tStart + distInBox;
+                        
+                        if (totalDist < objDist) {
+                            objDist = totalDist;
+                            objHit = 1;
+                            objModelHitID = int(modelID);
+                            hitObjPos = objPos;
+                            
+                            if (lSide == 0) objHitNormal = vec3(-float(lStepDir.x), 0.0, 0.0);
+                            else if (lSide == 1) objHitNormal = vec3(0.0, -float(lStepDir.y), 0.0);
+                            else objHitNormal = vec3(0.0, 0.0, -float(lStepDir.z));
+                        }
+                }
+            }
+        }
+        
+        if (objHit == 1) {
+            rayDist = objDist;
+            hit = 3; 
+            hitNormal = objHitNormal;
+            wallID = objVoxelID; // Temporary reuse of wallID
+        }
 
         vec3 color;
         
-        if (hit == 1) {
+        if (hit == 1 || hit == 3) {
             vec3 hitPos = rayPos + rayDir * rayDist;
             
             vec2 texUV;
-            if (wallID == 20) {
+            
+            if (hit == 3) {
+                vec3 localHit = (hitPos - hitObjPos) * 6.0;
+                if (abs(hitNormal.x) > 0.5) { 
+                    float wallX = localHit.y;
+                    if (hitNormal.x > 0.0) wallX = localHit.y; 
+                    else wallX = 1.0 - localHit.y;
+                    texUV = vec2(fract(wallX), fract(1.0 - localHit.z));
+                }
+                else if (abs(hitNormal.y) > 0.5) { 
+                    float wallX = localHit.x;
+                    if (hitNormal.y > 0.0) wallX = 1.0 - localHit.x;
+                    else wallX = localHit.x;
+                    texUV = vec2(fract(wallX), fract(1.0 - localHit.z));
+                }
+                else { 
+                    texUV = vec2(fract(localHit.x), fract(localHit.y));
+                }
+            }
+            else if (wallID == 20) {
                 if (abs(hitNormal.x) > 0.5) {
                     texUV = vec2(fract(hitPos.y), fract(hitPos.z * 2.0));
                 } else {
@@ -759,7 +895,10 @@ init -10 python:
             }
 
             float faceShadow = 1.0;
-            if (wallID == 20) {
+            if (hit == 3) {
+                if (abs(hitNormal.y) > 0.5) faceShadow = 0.7;
+            }
+            else if (wallID == 20) {
                 faceShadow = 0.6 + 0.4 * hitNormal.z;
             } else {
                 if (side == 1) faceShadow = 0.7; 
@@ -2159,6 +2298,52 @@ init -10 python:
             renderer.add_uniform("u_num_active_sprites", active_sprites)
             renderer.add_uniform("u_sprites", c.shader_sprite_buffer)
 
+            # Pass Objects (Voxel Models)
+            active_objects = []
+            if hasattr(c, 'objects_def') and c.objects_def:
+                count = 0
+                for obj in c.objects_def:
+                    if count >= 128: break
+                    try:
+                        # obj is (x, y, z, filename)
+                        parts = c.loaded_models.get(obj[3], [])
+                        
+                        if isinstance(parts, int):
+                            parts = [(0,0,0, parts)]
+                            
+                        if not parts:
+                            # print(f"W: Object {obj[3]} has no renderable parts/chunks")
+                            pass
+
+                        for ox, oy, oz, mid in parts:
+                            if count >= 128: 
+                                print("W: Max object limit (128) reached")
+                                break
+                            
+                            # Apply offsets relative to world position
+                            wx = float(obj[0]) + float(ox)
+                            wy = float(obj[1]) + float(oy)
+                            wz = float(obj[2]) + float(oz)
+                            
+                            active_objects.append((wx, wy, wz, float(mid)))
+                            count += 1
+                    except Exception as e: 
+                        print(f"Error packing object: {e}")
+                        pass
+            
+            num_valid_objects = len(active_objects)
+            
+            # Pad to 128
+            while len(active_objects) < 128:
+                active_objects.append((0.0, 0.0, 0.0, -1.0))
+
+            renderer.add_uniform("u_objects", active_objects)
+            renderer.add_uniform("u_num_objects", float(num_valid_objects))
+
+            if hasattr(c, 'model_atlas'):
+                renderer.add_uniform("u_model_atlas", c.model_atlas)
+                renderer.add_uniform("u_num_models", float(c.num_models))
+
             # ADS Zoom Logic
             is_aiming = c.is_aiming or c.gp_aiming
             zoom_factor = 0.6 if is_aiming else 1.0
@@ -2270,12 +2455,13 @@ init -10 python:
             return renderer
 
     class GPURenpystein(renpy.Displayable):
-        def __init__(self, width, height, worldMap, exits=[], internal_width=None, internal_height=None, lighting_preset=None, **kwargs):
+        def __init__(self, width, height, worldMap, exits=[], objects=[], internal_width=None, internal_height=None, lighting_preset=None, **kwargs):
             super(GPURenpystein, self).__init__(**kwargs)
             self.width = width
             self.height = height
             self.map_data = worldMap
             self.worldMap = worldMap 
+            self.objects_def = objects # List of (x, y, z, filename) 
             
             if isinstance(worldMap, dict) or hasattr(worldMap, 'items'):
                 max_x = 0
@@ -2340,9 +2526,12 @@ init -10 python:
             
             self.map_texture = self.create_map_texture()
             self.wall_atlas, self.num_textures = self.create_wall_atlas()
+            self.model_atlas, self.num_models = self.create_model_atlas(objects)
             self.floor_texture = self.load_floor_texture()
             self.sprite_atlas, self.num_sprite_textures = self.create_sprite_atlas()
             self.solid_base = renpy.display.imagelike.Solid("#000", xsize=width, ysize=height)
+            
+            self.raycast_layer = RaycastLayer(self, xsize=self.internal_width, ysize=self.internal_height)
             
             sky_path = self.lighting_preset.get('sky_texture', "pics/background.webp")
             try:
@@ -2395,7 +2584,7 @@ init -10 python:
             self.flashlight_on = False 
             self.prev_btn_flashlight = False
             
-            self.raycast_layer = RaycastLayer(self)
+            # self.raycast_layer = RaycastLayer(self) # Now initialized earlier
             
             pygame.joystick.init()
             self.joysticks = [pygame.joystick.Joystick(x) for x in range(pygame.joystick.get_count())]
@@ -2781,6 +2970,135 @@ init -10 python:
             
             print(f"RenPyStein GPU: Sprite Atlas Created. Size: {atlas_w}x{atlas_h}. Textures: {num_tex}")
             return renpy.display.draw.load_texture(atlas), float(num_tex)
+
+        def create_model_atlas(self, objects_def):
+            if not objects_def:
+                s = pygame.Surface((1,1), flags=pygame.SRCALPHA, depth=32)
+                return renpy.display.draw.load_texture(s), 0.0
+
+            unique_files = sorted(list(set([o[3] for o in objects_def])))
+            self.loaded_models = {} # list of (offset_x, offset_y, offset_z, atlas_id)
+
+            # Temporary structure to hold all identified chunks from all models
+            # List of { 'grid': {z: [[rows]]}, 'filename': str }
+            all_chunks = []
+            
+            # print("--- RENPYSTEIN OBJECT LOADER DEBUG ---")
+            for filename in unique_files:
+                print(f"I: Processing object file: {filename}")
+                try:
+                    data = renpy.store.load_object_json(filename)
+                except:
+                    print(f"E: Failed to load object model: {filename}")
+                    data = None
+
+
+                if data:
+                    # Chunks dict: key=(cx, cy, cz), value=layers dict
+                    model_chunks = {} 
+                    total_tiles_found = 0
+                    
+                    layers = {}
+                    # Try to handle it as dict-like
+                    try:
+                        iterator = []
+                        if hasattr(data, 'items'):
+                            iterator = data.items()
+                        elif isinstance(data, dict):
+                            iterator = data.items()
+
+                        for k, v in iterator:
+                            try:
+                                layers[int(k)] = v
+                            except:
+                                pass
+                    except Exception as e:
+                        print(f"E: Model loading iteration error: {e}")
+
+                    # if isinstance(data, dict):
+                    #     # print(f"DEBUG: Data Type: {type(data)} Keys: {list(data.keys())}")
+                    #     for k, v in data.items():
+                    #         try:
+                    #             layers[int(k)] = v
+                    #         except Exception as e:
+                    #             print(f"DEBUG: Failed to parse layer key {k}: {e}")
+                    #             pass
+                    
+                    print(f"I: Data loaded for {filename}. Z-Levels found: {list(layers.keys())}")
+
+                    for z, grid in layers.items():
+                        cz = z // 6
+                        lz = z % 6
+                        
+                        for x, row in enumerate(grid):
+                            cx = x // 6
+                            lx = x % 6
+                            
+                            for y, tile in enumerate(row):
+                                cy = y // 6
+                                ly = y % 6
+                                
+                                if tile > 0:
+                                    total_tiles_found += 1
+                                    chunk_key = (cx, cy, cz)
+                                    if chunk_key not in model_chunks:
+                                        # Initialize empty chunk grid (0..5 z levels)
+                                        model_chunks[chunk_key] = {}
+                                        for iz in range(6):
+                                            model_chunks[chunk_key][iz] = [[0]*6 for _ in range(6)]
+                                    
+                                    model_chunks[chunk_key][lz][lx][ly] = tile
+                    
+                    print(f"I: File {filename} contained {total_tiles_found} voxels.")
+                    print(f"I: Generated {len(model_chunks)} chunks for {filename}: {list(model_chunks.keys())}")
+
+                    # Register these chunks
+                    self.loaded_models[filename] = []
+
+                    
+                    # Sort keys to ensure deterministic order isnt strictly necessary but good for debug
+                    for (cx, cy, cz), chunk_grid in model_chunks.items():
+                        # Assign a new global ID
+                        atlas_id = len(all_chunks)
+                        all_chunks.append(chunk_grid)
+                        
+                        # Store the offset mapping for this file
+                        self.loaded_models[filename].append((cx, cy, cz, atlas_id))
+            
+            # Setup Atlas Surface
+            num_total_chunks = len(all_chunks)
+            if num_total_chunks == 0:
+                s = pygame.Surface((1,1), flags=pygame.SRCALPHA, depth=32)
+                return renpy.display.draw.load_texture(s), 0.0
+
+            w = 36
+            h = 6 * num_total_chunks
+            
+            surf = pygame.Surface((w, h), flags=pygame.SRCALPHA, depth=32)
+            surf.fill((0,0,0,0))
+            
+            # Paint Chunks
+            for i, chunk_layers in enumerate(all_chunks):
+                base_y_atlas = i * 6
+                
+                # Iterate the chunks local layers (0..5)
+                for z, rows in chunk_layers.items():
+                    if z < 0 or z > 5: continue
+                    
+                    base_x_atlas = z * 6
+                    
+                    for x in range(6):
+                        for y in range(6):
+                            tile = rows[x][y]
+                            if tile > 0:
+                                # Write to surface
+                                # The shader expects:
+                                # tu = (z * 6 + x + 0.5) / 36.0
+                                # tv = (modelID * 6 + y + 0.5) / (6 * num_models)
+                                surf.set_at((base_x_atlas + x, base_y_atlas + y), (255, tile, 0, 255))
+
+            print(f"RenPyStein GPU: Model Atlas Created. Size: {w}x{h}. Total Chunks: {num_total_chunks}")
+            return renpy.display.draw.load_texture(surf), float(num_total_chunks)
 
         def create_map_texture(self):
             def next_power_of_two(n):

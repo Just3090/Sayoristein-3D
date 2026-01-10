@@ -33,6 +33,7 @@ default stein_sniper_count = 0
 default stein_yuritler_count = 0
 default worldMap = []
 default exits = []
+default stein_objects = [] # List of (x, y, z, "filename.json")
 
 default stein_current_fps = 60
 default stein_current_lighting = None
@@ -122,6 +123,49 @@ init python:
             print("Error loading map: " + str(e))
             return None
 
+    def load_object_json(filename):
+        """
+        Loads a voxel model from game/save_objects/filename.
+        Similar to load_level_json but for object models.
+        """
+        save_dir = os.path.join(config.gamedir, "save_objects")
+        full_path = os.path.join(save_dir, filename)
+        
+        if not os.path.exists(full_path):
+            if os.path.exists(filename):
+                full_path = filename
+            else:
+                print("Object file not found: " + full_path)
+                return None
+                
+        try:
+            with open(full_path, "r") as f:
+                data = json.load(f)
+            
+            # Post-process: Convert keys back to int if they represent Z levels
+            if isinstance(data, dict):
+                new_data = {}
+                is_z_level_map = True
+                
+                for k in data.keys():
+                    try:
+                        int(k)
+                    except:
+                        # print(f"DEBUG: Key {k} is not int in {filename}")
+                        is_z_level_map = False
+                        break
+                
+                if is_z_level_map:
+                    for k, v in data.items():
+                        new_data[int(k)] = v
+                    return new_data
+                else:
+                    return data
+            return data
+        except Exception as e:
+            print("Error loading object: " + str(e))
+            return None
+
     if 's' in config.keymap['screenshot']:
         config.keymap['screenshot'].remove('s')
     if 'alt_s' in config.keymap['screenshot']:
@@ -151,32 +195,7 @@ init python:
     # --- Level 1 Data ---
     level1_data = {
         "lighting": "day",
-        "worldMap": [
-            [8,8,8,8,8,8,8,8,8,8,8,4,4,6,4,4,6,4,6,4,4,4,6,4],
-            [8,0,0,0,0,0,0,0,0,0,8,4,0,0,0,0,0,0,0,0,0,0,0,4],
-            [8,0,3,3,0,0,0,0,0,8,8,4,0,0,0,0,0,0,0,0,0,0,0,6],
-            [8,0,0,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6],
-            [8,0,3,3,0,0,0,0,0,8,8,4,0,0,0,0,0,0,0,0,0,0,0,4],
-            [8,0,0,0,0,0,0,0,0,0,8,4,0,0,0,0,0,6,6,6,0,6,4,6],
-            [8,8,8,8,0,8,8,8,8,8,8,4,4,4,4,4,4,6,0,0,0,0,0,6],
-            [7,7,7,7,0,7,7,7,7,0,8,0,8,0,8,0,8,4,0,4,0,6,0,6],
-            [7,7,0,0,0,0,0,0,7,8,0,8,0,8,0,8,8,6,0,0,0,0,0,6],
-            [7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,8,6,0,0,0,0,0,4],
-            [7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,8,6,0,6,0,6,0,6],
-            [7,7,0,0,0,0,0,0,7,8,0,8,0,8,0,8,8,6,4,6,0,6,6,6],
-            [7,7,7,7,0,7,7,7,7,8,8,4,0,6,8,4,8,3,3,3,0,3,3,3],
-            [2,2,2,2,0,2,2,2,2,4,6,4,0,0,6,0,6,3,0,0,0,0,0,3],
-            [2,2,0,0,0,0,0,2,2,4,0,0,0,0,0,0,4,3,0,0,0,0,0,3],
-            [2,0,0,0,0,0,0,0,2,4,0,0,0,0,0,0,4,3,0,0,0,0,0,3],
-            [1,0,0,0,0,0,0,0,1,4,4,4,4,4,6,0,6,3,3,0,0,0,3,3],
-            [2,0,0,0,0,0,0,0,2,2,2,1,2,2,2,6,6,0,0,5,0,5,0,5],
-            [2,2,0,0,0,0,0,2,2,2,0,0,0,2,2,0,5,0,5,0,0,0,5,5],
-            [2,0,0,0,0,0,0,0,2,0,0,0,0,0,2,5,0,5,0,5,0,5,0,5],
-            [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5],
-            [2,0,0,0,0,0,0,0,2,0,0,0,0,0,2,5,0,5,0,5,0,5,0,5],
-            [2,2,0,0,0,0,0,2,2,2,0,0,0,2,2,0,5,0,5,0,0,0,5,5],
-            [2,2,2,2,1,2,2,2,2,2,2,1,2,2,2,5,5,5,5,5,5,5,5,5]
-        ],
+        "worldMap": load_level_json("test.json"),
         "player_x": 22.0, "player_y": 11.5,
         "player_dirx": -1.0, "player_diry": 0.0,
         "player_planex": 0.0, "player_planey": 0.66,
@@ -187,10 +206,11 @@ init python:
             (20.5, 11.5, 2), (18.5,4.5, 2), (10.0,4.5, 2), (10.0,12.5,2),
             (3.5, 6.5, 2), (3.5, 20.5,2), (3.5, 14.5,2), (14.5,20.5,2)
         ],
-        "exits": [
-            (1.5, 1.5, "Exit 1"), (1.5, 22.5, "Exit 2"),
-            (21.5, 1.5, "Exit 3"), (21.5, 22.5, "Exit 4")
-        ]
+        "exits": [],
+        "objects": [
+            # (X, Y, Z, "Archivo")
+            (6.0, 8.0, 2.0, "test.json")
+        ],
     }
 
     # --- Level 2 Data ---
@@ -395,6 +415,10 @@ init python:
         for exit_coord in level_data["exits"]:
             temp_sprites.append((exit_coord[0], exit_coord[1], 0)) # 0 is the barrel sprite index
         renpy.store.stein_sprites = temp_sprites
+        
+        # Load Objects
+        # objects defined as (x, y, z, "filename") in level_data["objects"]
+        renpy.store.stein_objects = list(level_data.get("objects", []))
 
         # Pass arena data to the store
         renpy.store.is_arena_mode = arena
@@ -441,6 +465,7 @@ screen stein:
         1280, 720,
         worldMap=worldMap,
         exits=exits,
+        objects=stein_objects,
         internal_width=internal_width,
         internal_height=internal_height,
         lighting_preset=stein_current_lighting
