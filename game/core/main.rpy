@@ -247,15 +247,41 @@ init python:
         except:
             return []
 
+    class FloatInputValue(InputValue):
+        def __init__(self, object, field):
+            self.object = object
+            self.field = field
+
+        def get_text(self):
+            val = getattr(self.object, self.field)
+            return "{:.2f}".format(val)
+
+        def set_text(self, text):
+            try:
+                val = float(text)
+                setattr(self.object, self.field, val)
+            except ValueError:
+                pass # Ignore invalid float input
+
+        def enter(self):
+            return getattr(self.object, self.field)
+
+    class EditorTransform(object):
+        def __init__(self):
+            self.x = 0.0
+            self.y = 0.0
+            self.z = 0.0
+
     def load_object_into_editor(renderer_obj, filename):
         """
-        Loads an object file into the provided renderer instance, updating map and camera.
+        Loads an object file AS A MAP (Scale 1:1) for visual editing.
+        Uses Inverse Camera logic for animation preview.
         """
         import math
         data = load_object_json(filename)
         
         if data:
-            # Update Map Data
+            # Load as World Map
             renderer_obj.worldMap = data
             renderer_obj.map_data = data
             
@@ -283,20 +309,93 @@ init python:
             # Regenerate Texture
             renderer_obj.map_texture = renderer_obj.create_map_texture()
             
-            # Reset Camera
-            center_x = renderer_obj.mapWidth / 2.0
-            renderer_obj.player.x = center_x
-            renderer_obj.player.y = -5.0
-            renderer_obj.player.z = 0.0
+            # Rebuild Model Atlas (Empty - we are rendering walls)
+            renderer_obj.model_atlas, renderer_obj.num_models = renderer_obj.create_model_atlas([])
             
-            # Look North (Positive Y)
+            # Create Editor Target (Dummy for Animation Data)
+            renderer_obj.editor_target = EditorTransform()
+            
+            # Clear Scene Objects
+            renderer_obj.scene_objects = []
+            
+            # Reset Camera
+            cx = renderer_obj.mapWidth / 2.0
+            cy = renderer_obj.mapHeight / 2.0
+            
+            renderer_obj.player.x = cx
+            renderer_obj.player.y = cy - 12.0
+            renderer_obj.player.z = 4.0
             renderer_obj.player.rot = math.pi / 2.0 
             renderer_obj.player.pitch = 0.0
-            
-            # Reset Physics
             renderer_obj.player.velocity_z = 0.0
             
+            # Standard FOV
+            renderer_obj.player.planex = 0.66
+            renderer_obj.player.planey = 0.0
+            
             renpy.restart_interaction()
+
+    # Animation Logic
+    def add_keyframe(anim_data, track, time, value, easing="linear"):
+        """Inserts or updates a keyframe in the animation data."""
+        if track not in anim_data["tracks"]:
+            anim_data["tracks"][track] = []
+        
+        updated = False
+        for k in anim_data["tracks"][track]:
+            if abs(k["time"] - time) < 0.001:
+                k["value"] = value
+                k["easing"] = easing
+                updated = True
+                break
+        
+        if not updated:
+            anim_data["tracks"][track].append({ "time": time, "value": value, "easing": easing })
+        
+        # Sort by time
+        anim_data["tracks"][track].sort(key=lambda x: x["time"])
+
+    def remove_keyframe(anim_data, track, time):
+        """Removes a keyframe at specific time."""
+        if track in anim_data["tracks"]:
+            anim_data["tracks"][track] = [k for k in anim_data["tracks"][track] if abs(k["time"] - time) > 0.001]
+
+    def get_anim_value_at_time(anim_data, track, time, default_val=0.0):
+        """Calculates interpolated value for a track at a given time."""
+        if track not in anim_data["tracks"] or not anim_data["tracks"][track]:
+            return default_val
+            
+        keyframes = anim_data["tracks"][track]
+        
+        # Boundary checks
+        if time <= keyframes[0]["time"]: return keyframes[0]["value"]
+        if time >= keyframes[-1]["time"]: return keyframes[-1]["value"]
+        
+        # Interpolation
+        for i in range(len(keyframes) - 1):
+            k1 = keyframes[i]
+            k2 = keyframes[i+1]
+            
+            if time >= k1["time"] and time < k2["time"]:
+                duration = k2["time"] - k1["time"]
+                if duration <= 0: return k1["value"]
+                
+                t = (time - k1["time"]) / duration
+                
+                # TODO: Implement Easing logic here (Quad, Cubic, etc.)
+                # Linear for testing
+                return k1["value"] + (k2["value"] - k1["value"]) * t
+                
+        return default_val
+
+    def apply_animation_frame(anim_data, target_obj, time):
+        """Updates the target object properties based on animation data at 'time'."""
+        if not target_obj: return
+        
+        target_obj.x = get_anim_value_at_time(anim_data, "x", time, target_obj.x)
+        target_obj.y = get_anim_value_at_time(anim_data, "y", time, target_obj.y)
+        target_obj.z = get_anim_value_at_time(anim_data, "z", time, target_obj.z)
+        # Add rotation later
 
     if 's' in config.keymap['screenshot']:
         config.keymap['screenshot'].remove('s')
@@ -726,6 +825,10 @@ screen animation_editor():
     default current_anim_data = { "meta": { "name": "new_anim", "duration": 2.0, "loop": True }, "tracks": {} }
     default anim_file_list = get_anim_files()
     
+    # Timeline State
+    default current_time = 0.0
+    default is_playing = False
+    
     # Object Explorer State
     default explorer_tab = "anims" # "anims" or "objects"
     default object_file_list = get_object_files()
@@ -761,10 +864,21 @@ screen animation_editor():
                 ysize editor_viewport_height
                 padding (0,0)
                 
-                # The 3D renderer
-                add renderer
+                fixed:
+                    # The 3D renderer
+                    add renderer
+                    
+                    # Overlay: tools
+                    hbox:
+                        align (0.02, 0.05) spacing 10
+                        textbutton "Map Builder":
+                            action ToggleField(renderer, "builder_mode")
+                            background Solid("#0008")
+                            padding (10, 5)
+                            text_color ("#0F0" if renderer.builder_mode else "#AAA")
+                            text_hover_color "#FFF"
 
-            # Bottom toolbar
+            # Bottom Toolbar
             frame:
                 background Solid("#333")
                 xsize editor_viewport_width
@@ -777,19 +891,53 @@ screen animation_editor():
                     # Left: timeline area
                     vbox:
                         xsize int(editor_viewport_width * 0.6)
-                        spacing 5
-                        text "Timeline / Animation Keys" size 20 color "#FFF"
-                        null height 10
+                        spacing 10
+                        
+                        # Controls header
                         hbox:
-                            spacing 10
-                            textbutton "|<" action None
-                            textbutton "<" action None
-                            textbutton "Play" action None
-                            textbutton ">" action None
-                            textbutton ">|" action None
+                            spacing 15
+                            text "Timeline" size 20 color "#FFF" yalign 0.5
                             
-                            null width 50
-                            text "Frame: 0" color "#AAA" yalign 0.5
+                            textbutton "|<":
+                                action SetScreenVariable("current_time", 0.0) 
+                                text_color "#DDD"
+                            
+                            textbutton ("Stop" if is_playing else "Play"):
+                                action SetScreenVariable("is_playing", not is_playing)
+                                text_color ("#F88" if is_playing else "#8F8")
+                            
+                            text "Time: [current_time:.2f]s / [current_anim_data['meta']['duration']]s" color "#AAA" yalign 0.5 size 16
+
+                        if is_playing:
+                            timer 0.016 repeat True action [
+                                SetScreenVariable("current_time", (current_time + 0.016) % max(0.1, current_anim_data['meta']['duration'])),
+                                Function(apply_animation_frame, current_anim_data, renderer.editor_target, current_time)
+                            ]
+
+                        # Scrubber bar
+                        bar:
+                            value ScreenVariableValue("current_time", range=current_anim_data['meta']['duration'])
+                            xfill True
+                            ysize 30
+                            
+                            # Live Preview: update object as we scrub
+                            changed Function(apply_animation_frame, current_anim_data, renderer.editor_target, current_time)
+                        
+                        # Keyframe markers (visual guide)
+                        # We draw simple rectangles where keyframes exist
+                        if current_anim_data.get("tracks"):
+                            fixed:
+                                ysize 10
+                                xfill True
+                                for track_name, keys in current_anim_data["tracks"].items():
+                                    for k in keys:
+                                        # Calculate position percentage
+                                        $ k_pos = (k["time"] / max(0.1, current_anim_data['meta']['duration']))
+                                        if k_pos <= 1.0:
+                                            frame:
+                                                background Solid("#FFFF00")
+                                                xsize 4 ysize 8
+                                                align (k_pos, 0.5)
                     
                     # Separator
                     add Solid("#444") xsize 2 ysize 180
@@ -889,30 +1037,49 @@ screen animation_editor():
                 
                 null height 20
                 
-                textbutton "Add Keyframe" action None xfill True
-                textbutton "Remove Keyframe" action None xfill True
+                if renderer.editor_target:
+                    textbutton "Add Keyframe":
+                        action [
+                            Function(add_keyframe, current_anim_data, "x", current_time, renderer.editor_target.x),
+                            Function(add_keyframe, current_anim_data, "y", current_time, renderer.editor_target.y),
+                            Function(add_keyframe, current_anim_data, "z", current_time, renderer.editor_target.z),
+                            Notify("Keyframe added at [current_time]s")
+                        ]
+                        xfill True
+                    
+                    textbutton "Remove Keyframe":
+                        action [
+                            Function(remove_keyframe, current_anim_data, "x", current_time),
+                            Function(remove_keyframe, current_anim_data, "y", current_time),
+                            Function(remove_keyframe, current_anim_data, "z", current_time),
+                            Notify("Keyframe removed at [current_time]s")
+                        ]
+                        xfill True
                 
                 null height 20
                 
-                text "Transform" size 18 color "#AAA"
-                hbox:
-                    text "X: " color "#AAA" yalign 0.5
-                    if editing_field == "x":
-                        input value ScreenVariableInputValue("obj_x") length 10 color "#FFF" pixel_width 150 action SetScreenVariable("editing_field", None)
-                    else:
-                        textbutton "[obj_x]" action SetScreenVariable("editing_field", "x") text_color "#FFF"
-                hbox:
-                    text "Y: " color "#AAA" yalign 0.5
-                    if editing_field == "y":
-                        input value ScreenVariableInputValue("obj_y") length 10 color "#FFF" pixel_width 150 action SetScreenVariable("editing_field", None)
-                    else:
-                        textbutton "[obj_y]" action SetScreenVariable("editing_field", "y") text_color "#FFF"
-                hbox:
-                    text "Z: " color "#AAA" yalign 0.5
-                    if editing_field == "z":
-                        input value ScreenVariableInputValue("obj_z") length 10 color "#FFF" pixel_width 150 action SetScreenVariable("editing_field", None)
-                    else:
-                        textbutton "[obj_z]" action SetScreenVariable("editing_field", "z") text_color "#FFF"
+                if renderer.editor_target:
+                    text "Transform (Offset)" size 18 color "#AAA"
+                    hbox:
+                        text "X: " color "#AAA" yalign 0.5
+                        if editing_field == "x":
+                            input value FloatInputValue(renderer.editor_target, 'x') length 10 color "#FFF" pixel_width 150 action SetScreenVariable("editing_field", None)
+                        else:
+                            textbutton "[renderer.editor_target.x:.2f]" action SetScreenVariable("editing_field", "x") text_color "#FFF"
+                    hbox:
+                        text "Y: " color "#AAA" yalign 0.5
+                        if editing_field == "y":
+                            input value FloatInputValue(renderer.editor_target, 'y') length 10 color "#FFF" pixel_width 150 action SetScreenVariable("editing_field", None)
+                        else:
+                            textbutton "[renderer.editor_target.y:.2f]" action SetScreenVariable("editing_field", "y") text_color "#FFF"
+                    hbox:
+                        text "Z: " color "#AAA" yalign 0.5
+                        if editing_field == "z":
+                            input value FloatInputValue(renderer.editor_target, 'z') length 10 color "#FFF" pixel_width 150 action SetScreenVariable("editing_field", None)
+                        else:
+                            textbutton "[renderer.editor_target.z:.2f]" action SetScreenVariable("editing_field", "z") text_color "#FFF"
+                else:
+                    text "No Object Loaded" color "#666"
 
     textbutton "Exit Editor" action Return() align (1.0, 0.0) offset (-10, -10)
 

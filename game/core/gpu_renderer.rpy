@@ -1593,8 +1593,12 @@ init -10 python:
             self.dirx = math.cos(self.rot)
             self.diry = math.sin(self.rot)
             
-            self.planex = math.cos(self.rot - 1.5708) * 0.66 
-            self.planey = math.sin(self.rot - 1.5708) * 0.66
+            # Preserve FOV
+            current_fov = math.sqrt(self.planex**2 + self.planey**2)
+            if current_fov < 0.01: current_fov = 0.66
+            
+            self.planex = math.cos(self.rot - 1.5708) * current_fov
+            self.planey = math.sin(self.rot - 1.5708) * current_fov
 
     class Projectile(object):
         def __init__(self, wm, x, y, dir_x, dir_y, texture_index, damage, fired_by_player=False, is_invisible=False, pitch=0.0):
@@ -2279,36 +2283,31 @@ init -10 python:
 
             # Pass Objects (Voxel Models)
             active_objects = []
-            if hasattr(c, 'objects_def') and c.objects_def:
+            
+            # Use mutable scene_objects if available
+            source_objects = getattr(c, 'scene_objects', [])
+            
+            if source_objects:
                 count = 0
-                for obj in c.objects_def:
+                for obj in source_objects:
                     if count >= 128: break
-                    try:
-                        # obj is (x, y, z, filename)
-                        parts = c.loaded_models.get(obj[3], [])
-                        
-                        if isinstance(parts, int):
-                            parts = [(0,0,0, parts)]
-                            
-                        if not parts:
-                            # print(f"W: Object {obj[3]} has no renderable parts/chunks")
-                            pass
+                    if not getattr(obj, 'visible', True): continue
 
-                        for ox, oy, oz, mid in parts:
-                            if count >= 128: 
-                                print("W: Max object limit (128) reached")
-                                break
-                            
-                            # Apply offsets relative to world position
-                            wx = float(obj[0]) + float(ox)
-                            wy = float(obj[1]) + float(oy)
-                            wz = float(obj[2]) + float(oz)
-                            
-                            active_objects.append((wx, wy, wz, float(mid)))
-                            count += 1
-                    except Exception as e: 
-                        print(f"Error packing object: {e}")
-                        pass
+                    # Iterate parts
+                    parts = getattr(obj, 'model_parts', [])
+                    for ox, oy, oz, mid in parts:
+                        if count >= 128: 
+                            # print("W: Max object limit (128) reached")
+                            break
+                        
+                        # Apply offsets relative to object world position
+                        # TODO: Apply Rotation/Scale
+                        wx = obj.x + float(ox)
+                        wy = obj.y + float(oy)
+                        wz = obj.z + float(oz)
+                        
+                        active_objects.append((wx, wy, wz, float(mid)))
+                        count += 1
             
             num_valid_objects = len(active_objects)
             
@@ -2335,13 +2334,23 @@ init -10 python:
             plane_x = c.player.planex * zoom_factor
             plane_y = c.player.planey * zoom_factor
 
+            # Calculate Camera Position (Inverse logic for Editor)
+            cam_x = c.player.x
+            cam_y = c.player.y
+            cam_z = c.player.z
+            
+            if hasattr(c, 'editor_target') and c.editor_target:
+                cam_x -= c.editor_target.x
+                cam_y -= c.editor_target.y
+                cam_z -= c.editor_target.z
+
             renderer.add_uniform('u_resolution', (float(width), float(height)))
             renderer.add_uniform('u_time', st)
-            renderer.add_uniform('u_player_pos', (c.player.x, c.player.y))
+            renderer.add_uniform('u_player_pos', (cam_x, cam_y))
             renderer.add_uniform('u_player_dir', (c.player.dirx, c.player.diry))
             renderer.add_uniform('u_player_plane', (plane_x, plane_y))
             renderer.add_uniform('u_pitch', (c.player.pitch / float(height)) + bob_offset)
-            renderer.add_uniform('u_z_offset', c.player.z)
+            renderer.add_uniform('u_z_offset', cam_z)
             renderer.add_uniform('u_vertical_scale', vertical_scale)
             renderer.add_uniform('u_sky_texture', c.sky_texture)
             renderer.add_uniform('u_volumetric_clouds', 1.0 if persistent.stein_volumetric_clouds else 0.0)
@@ -2433,6 +2442,23 @@ init -10 python:
             renpy.redraw(self, 0.000001)
             return renderer
 
+    class SceneObject(object):
+        def __init__(self, x, y, z, filename, model_parts=[]):
+            self.x = float(x)
+            self.y = float(y)
+            self.z = float(z)
+            self.filename = filename
+            self.model_parts = model_parts # List of (offset_x, offset_y, offset_z, model_id)
+            
+            # Mutable Transform Properties
+            self.scale_x = 1.0
+            self.scale_y = 1.0
+            self.scale_z = 1.0
+            self.rot_x = 0.0
+            self.rot_y = 0.0
+            self.rot_z = 0.0
+            self.visible = True
+
     class GPURenpystein(renpy.Displayable):
         def __init__(self, width, height, worldMap, exits=[], objects=[], internal_width=None, internal_height=None, lighting_preset=None, editor_mode=False, **kwargs):
             super(GPURenpystein, self).__init__(**kwargs)
@@ -2441,6 +2467,7 @@ init -10 python:
             self.map_data = worldMap
             self.worldMap = worldMap
             self.editor_mode = editor_mode 
+            self.editor_target = None # For Editor Inverse Camera logic
             self.objects_def = objects # List of (x, y, z, filename) 
             
             if isinstance(worldMap, dict) or hasattr(worldMap, 'items'):
@@ -2507,6 +2534,23 @@ init -10 python:
             self.map_texture = self.create_map_texture()
             self.wall_atlas, self.num_textures = self.create_wall_atlas()
             self.model_atlas, self.num_models = self.create_model_atlas(objects)
+
+            self.scene_objects = []
+            if objects:
+                for obj_def in objects:
+                    # obj_def is (x, y, z, filename)
+                    if len(obj_def) >= 4:
+                        x, y, z, fname = obj_def
+                        
+                        # Resolve parts from loaded models
+                        parts = self.loaded_models.get(fname, [])
+                        if isinstance(parts, int):
+                            parts = [(0,0,0, parts)]
+                        
+                        # Create SceneObject
+                        sobj = SceneObject(x, y, z, fname, model_parts=parts)
+                        self.scene_objects.append(sobj)
+
             self.floor_texture = self.load_floor_texture()
             self.sprite_atlas, self.num_sprite_textures = self.create_sprite_atlas()
             self.solid_base = renpy.display.imagelike.Solid("#000", xsize=width, ysize=height)
@@ -4011,7 +4055,10 @@ init -10 python:
                         pygame.mouse.set_visible(True); pygame.event.set_grab(False); self.mouse_initialized = False
                         self.kb_speed = 0.0; self.kb_strafe = 0.0; self.kb_dir = 0.0; self.kb_fly_up = False; self.kb_fly_down = False
                     
-                    if ev.type != pygame.KEYUP:
+                    # Allow Builder actions (Click) or KeyUp cleanup, otherwise block
+                    if self.builder_mode and (ev.type == pygame.MOUSEBUTTONDOWN or ev.type == pygame.MOUSEBUTTONUP):
+                        pass
+                    elif ev.type != pygame.KEYUP:
                         return
 
                 # If RMB is held, we consume the event so it doesn't reach the UI (inputs)
@@ -4044,7 +4091,26 @@ init -10 python:
                 if self.editor_mode and not pygame.mouse.get_pressed()[2]: return 
 
                 if config.developer:
-                    pass
+                    if ev.key == pygame.K_o:
+                        self.builder_mode = not self.builder_mode
+                        self.player.fly_mode = self.builder_mode
+                        if self.builder_mode:
+                            self.pickup_msg = "BUILDER MODE ON"
+                            self.pickup_msg_timer = 2.0
+                        else:
+                            self.pickup_msg = "BUILDER MODE OFF"
+                            self.pickup_msg_timer = 2.0
+
+                    if ev.key == pygame.K_p:
+                        renpy.store.save_level_json(self.worldMap)
+                        self.pickup_msg = "LEVEL DATA SAVED"
+                        self.pickup_msg_timer = 2.0
+
+                    if ev.key == pygame.K_l:
+                        self.lock_map_expansion = not self.lock_map_expansion
+                        state = "LOCKED" if self.lock_map_expansion else "UNLOCKED"
+                        self.pickup_msg = f"MAP EXPANSION: {state}"
+                        self.pickup_msg_timer = 2.0
                 
                 # We need to capture the movement keys before they reach the UI
                 if ev.key in (pygame.K_w, pygame.K_s, pygame.K_a, pygame.K_d, pygame.K_SPACE, pygame.K_n, pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT):
@@ -4089,6 +4155,36 @@ init -10 python:
                 
                 if self.editor_mode and pygame.mouse.get_pressed()[2]:
                     raise renpy.IgnoreEvent()
+
+            if ev.type == pygame.MOUSEBUTTONDOWN:
+                if self.builder_mode:
+                    if not self.editor_mode:
+                        if ev.button == 1: # Left Click - Place
+                            self.handle_builder_action('place')
+                        elif ev.button == 3: # Right Click - Remove
+                            self.handle_builder_action('remove')
+                        elif ev.button == 4: # Wheel Up
+                            self.selected_voxel = (self.selected_voxel % int(self.num_textures)) + 1
+                            self.pickup_msg = f"VOXEL: {self.selected_voxel}"
+                            self.pickup_msg_timer = 1.0
+                        elif ev.button == 5: # Wheel Down
+                            self.selected_voxel = ((self.selected_voxel - 2) % int(self.num_textures)) + 1
+                            self.pickup_msg = f"VOXEL: {self.selected_voxel}"
+                            self.pickup_msg_timer = 1.0
+                    
+                    # Always return if builder mode is on to suppress weapons
+                    return 
+
+                if ev.button == 1: # Left mouse button
+                    self.mouse_firing = True
+                elif ev.button == 3: # Right mouse button (Aim)
+                    self.is_aiming = True
+            
+            if ev.type == pygame.MOUSEBUTTONUP:
+                if ev.button == 1:
+                    self.mouse_firing = False
+                elif ev.button == 3:
+                    self.is_aiming = False
 
         def poll_gamepad(self):
             self.gp_speed = 0.0; self.gp_strafe = 0.0; self.gp_dir = 0.0
