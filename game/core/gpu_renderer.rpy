@@ -621,8 +621,8 @@ init -10 python:
                 
                 vec3 enterPos = rayPos + rayDir * tStart - objPos;
                 
-                // Scale up by 10.0 (Grid 10x10x10)
-                vec3 localPos = enterPos * 10.0;
+                // Scale up by 16.0 (Grid 16x16x16)
+                vec3 localPos = enterPos * 16.0;
                 vec3 localDir = rayDir; 
                 
                 // Local DDA
@@ -641,8 +641,8 @@ init -10 python:
                 int lHit = 0;
                 int lSide = 0;
                 
-                // Max steps for 10x10x10 is ~30 (diagonal), use 48 safely
-                for(int j=0; j<48; j++) {
+                // Max steps for 16x16x16 is ~48 (diagonal), use 80 safely
+                for(int j=0; j<80; j++) {
                     if (lSideDist.x < lSideDist.y) {
                         if (lSideDist.x < lSideDist.z) {
                             lSideDist.x += lDeltaDist.x; lMapPos.x += lStepDir.x; lSide=0;
@@ -658,10 +658,10 @@ init -10 python:
                         }
                     }
                     
-                    if (lMapPos.x < 0 || lMapPos.x > 9 || lMapPos.y < 0 || lMapPos.y > 9 || lMapPos.z < 0 || lMapPos.z > 9) break;
+                    if (lMapPos.x < 0 || lMapPos.x > 15 || lMapPos.y < 0 || lMapPos.y > 15 || lMapPos.z < 0 || lMapPos.z > 15) break;
                     
-                    float tu = (float(lMapPos.z) * 10.0 + float(lMapPos.x) + 0.5) / 100.0;
-                    float tv = (modelID * 10.0 + float(lMapPos.y) + 0.5) / (10.0 * max(1.0, u_num_models));
+                    float tu = (float(lMapPos.z) * 16.0 + float(lMapPos.x) + 0.5) / 256.0;
+                    float tv = (modelID * 16.0 + float(lMapPos.y) + 0.5) / (16.0 * max(1.0, u_num_models));
                     
                     // Force LOD 0 (-16.0 bias) for mipmaps
                     vec4 val = texture2D(u_model_atlas, vec2(tu, tv), -16.0);
@@ -679,9 +679,9 @@ init -10 python:
                 
                 if (lHit == 1) {
                         float distInBox = 0.0;
-                        if (lSide == 0) distInBox = (lSideDist.x - lDeltaDist.x) / 10.0;
-                        else if (lSide == 1) distInBox = (lSideDist.y - lDeltaDist.y) / 10.0;
-                        else distInBox = (lSideDist.z - lDeltaDist.z) / 10.0;
+                        if (lSide == 0) distInBox = (lSideDist.x - lDeltaDist.x) / 16.0;
+                        else if (lSide == 1) distInBox = (lSideDist.y - lDeltaDist.y) / 16.0;
+                        else distInBox = (lSideDist.z - lDeltaDist.z) / 16.0;
                         
                         float totalDist = tStart + distInBox;
                         
@@ -714,7 +714,7 @@ init -10 python:
             vec2 texUV;
             
             if (hit == 3) {
-                vec3 localHit = (hitPos - hitObjPos) * 10.0;
+                vec3 localHit = (hitPos - hitObjPos) * 16.0;
                 if (abs(hitNormal.x) > 0.5) { 
                     float wallX = localHit.y;
                     if (hitNormal.x > 0.0) wallX = localHit.y; 
@@ -3019,25 +3019,25 @@ init -10 python:
                     print(f"I: Data loaded for {filename}. Z-Levels found: {list(layers.keys())}")
 
                     for z, grid in layers.items():
-                        cz = z // 10
-                        lz = z % 10
+                        cz = z // 16
+                        lz = z % 16
                         
                         for x, row in enumerate(grid):
-                            cx = x // 10
-                            lx = x % 10
+                            cx = x // 16
+                            lx = x % 16
                             
                             for y, tile in enumerate(row):
-                                cy = y // 10
-                                ly = y % 10
+                                cy = y // 16
+                                ly = y % 16
                                 
                                 if tile > 0:
                                     total_tiles_found += 1
                                     chunk_key = (cx, cy, cz)
                                     if chunk_key not in model_chunks:
-                                        # Initialize empty chunk grid (0..9 z levels)
+                                        # Initialize empty chunk grid (0..15 z levels)
                                         model_chunks[chunk_key] = {}
-                                        for iz in range(10):
-                                            model_chunks[chunk_key][iz] = [[0]*10 for _ in range(10)]
+                                        for iz in range(16):
+                                            model_chunks[chunk_key][iz] = [[0]*16 for _ in range(16)]
                                     
                                     model_chunks[chunk_key][lz][lx][ly] = tile
                     
@@ -3063,30 +3063,30 @@ init -10 python:
                 s = pygame.Surface((1,1), flags=pygame.SRCALPHA, depth=32)
                 return renpy.display.draw.load_texture(s), 0.0
 
-            w = 100
-            h = 10 * num_total_chunks
+            w = 256
+            h = 16 * num_total_chunks
             
             surf = pygame.Surface((w, h), flags=pygame.SRCALPHA, depth=32)
             surf.fill((0,0,0,0))
             
             # Paint Chunks
             for i, chunk_layers in enumerate(all_chunks):
-                base_y_atlas = i * 10
+                base_y_atlas = i * 16
                 
-                # Iterate the chunks local layers (0..9)
+                # Iterate the chunks local layers (0..15)
                 for z, rows in chunk_layers.items():
-                    if z < 0 or z > 9: continue
+                    if z < 0 or z > 15: continue
                     
-                    base_x_atlas = z * 10
+                    base_x_atlas = z * 16
                     
-                    for x in range(10):
-                        for y in range(10):
+                    for x in range(16):
+                        for y in range(16):
                             tile = rows[x][y]
                             if tile > 0:
                                 # Write to surface
                                 # The shader expects:
-                                # tu = (z * 10 + x + 0.5) / 100.0
-                                # tv = (modelID * 10 + y + 0.5) / (10 * num_models)
+                                # tu = (z * 16 + x + 0.5) / 256.0
+                                # tv = (modelID * 16 + y + 0.5) / (16 * num_models)
                                 surf.set_at((base_x_atlas + x, base_y_atlas + y), (255, tile, 0, 255))
 
             print(f"RenPyStein GPU: Model Atlas Created. Size: {w}x{h}. Total Chunks: {num_total_chunks}")
