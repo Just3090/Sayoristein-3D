@@ -541,6 +541,12 @@ init -10 python:
         float rayDist = 0.0;
         vec3 hitNormal = vec3(0.0);
 
+        // Pre-calculate constants to avoid repeated casting/math in the tight loop
+        int i_map_w = int(u_map_size.x);
+        int i_map_h = int(u_map_size.y);
+        int i_layer_base = int(u_map_layer_base_y);
+        int i_layer_count = int(u_map_layer_count);
+
         for (int i = 0; i < MAX_STEPS; i++) {
             if (sideDist.x < sideDist.y) {
                 if (sideDist.x < sideDist.z) {
@@ -570,20 +576,16 @@ init -10 python:
             
             if (rayDist > u_max_dist) { hit = 2; break; } // Too far
             
-            // Map Bounds Check
-            bool inside = (mapPos.x >= 0 && mapPos.x < int(u_map_size.x) && mapPos.y >= 0 && mapPos.y < int(u_map_size.y));
-            
-            // Voxel Check
-            if (inside) {
-                int layer = int(mapPos.z);
-                int layer_idx = layer - int(u_map_layer_base_y);
+            // OSimplified Bounds & Layer Check
+            if (mapPos.x >= 0 && mapPos.x < i_map_w && mapPos.y >= 0 && mapPos.y < i_map_h) {
+                int layer_idx = mapPos.z - i_layer_base;
                 
-                if (layer_idx >= 0 && layer_idx < int(u_map_layer_count)) {
-                    float u = (float(mapPos.x) + 0.5) * u_map_tex_pixel_size.x;
-                    float v_base = float(layer_idx) * u_map_layer_norm_height;
-                    float v_local = (float(mapPos.y) + 0.5) * u_map_tex_pixel_size.y;
+                if (layer_idx >= 0 && layer_idx < i_layer_count) {
+                    // Vectorized UV math
+                    // float u = (float(mapPos.x) + 0.5) * u_map_tex_pixel_size.x; ...
+                    vec2 cellUV = (vec2(float(mapPos.x), float(mapPos.y)) + 0.5) * u_map_tex_pixel_size;
+                    vec2 mapUV = vec2(cellUV.x, cellUV.y + float(layer_idx) * u_map_layer_norm_height);
                     
-                    vec2 mapUV = vec2(u, v_base + v_local);
                     vec4 mapPixel = texture2D(u_map_texture, mapUV);
                     if (mapPixel.r > 0.5) {
                         int id = int(mapPixel.g * 255.0 + 0.5);
@@ -673,11 +675,17 @@ init -10 python:
                     float tu = (float(lMapPos.z) * 6.0 + float(lMapPos.x) + 0.5) / 36.0;
                     float tv = (modelID * 6.0 + float(lMapPos.y) + 0.5) / (6.0 * max(1.0, u_num_models));
                     
-                    vec4 val = texture2D(u_model_atlas, vec2(tu, tv));
-                    if (val.g > 0.0) { 
+                    // Force LOD 0 (-16.0 bias) for mipmaps
+                    vec4 val = texture2D(u_model_atlas, vec2(tu, tv), -16.0);
+                    
+                    // Check alpha to confirm voxel existence and unpremultiply to recover true ID
+                    if (val.a > 0.5) { 
+                        int voxID = int((val.g / val.a) * 255.0 + 0.5);
+                        if (voxID > 0) {
                             lHit = 1;
-                            objVoxelID = int(val.g * 255.0 + 0.5);
+                            objVoxelID = voxID;
                             break; 
+                        }
                     }
                 }
                 
