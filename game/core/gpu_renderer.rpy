@@ -2434,12 +2434,13 @@ init -10 python:
             return renderer
 
     class GPURenpystein(renpy.Displayable):
-        def __init__(self, width, height, worldMap, exits=[], objects=[], internal_width=None, internal_height=None, lighting_preset=None, **kwargs):
+        def __init__(self, width, height, worldMap, exits=[], objects=[], internal_width=None, internal_height=None, lighting_preset=None, editor_mode=False, **kwargs):
             super(GPURenpystein, self).__init__(**kwargs)
             self.width = width
             self.height = height
             self.map_data = worldMap
-            self.worldMap = worldMap 
+            self.worldMap = worldMap
+            self.editor_mode = editor_mode 
             self.objects_def = objects # List of (x, y, z, filename) 
             
             if isinstance(worldMap, dict) or hasattr(worldMap, 'items'):
@@ -3282,15 +3283,16 @@ init -10 python:
                     r.blit(heal_r, (0,0))
 
             # Crosshair
-            sight_r = renpy.render(self.sight_d, width, height, st, at)
-            sw, sh = sight_r.get_size()
-            r.blit(sight_r, (width/2 - sw/2, height/2 - sh/2))
-            
-            # Hit Marker
-            if self.hit_marker_timer > 0:
-                hm_w, hm_h = self.hit_marker_img.get_size()
-                hm_tex = renpy.display.draw.load_texture(self.hit_marker_img)
-                r.blit(hm_tex, (width/2 - hm_w/2, height/2 - hm_h/2))
+            if not self.editor_mode:
+                sight_r = renpy.render(self.sight_d, width, height, st, at)
+                sw, sh = sight_r.get_size()
+                r.blit(sight_r, (width/2 - sw/2, height/2 - sh/2))
+                
+                # Hit Marker
+                if self.hit_marker_timer > 0:
+                    hm_w, hm_h = self.hit_marker_img.get_size()
+                    hm_tex = renpy.display.draw.load_texture(self.hit_marker_img)
+                    r.blit(hm_tex, (width/2 - hm_w/2, height/2 - hm_h/2))
 
             if self.pickup_msg_timer > 0:
                 self.pickup_msg_timer -= dtime 
@@ -3352,13 +3354,14 @@ init -10 python:
                         self.return_value = e[2]
 
             # Weapon
-            movement_state = {
-                'is_moving': abs(self.player.speed) > 0.1 or abs(self.player.strafe_speed) > 0.1, 
-                'is_running': self.kb_running or self.gp_running
-            }
-            is_firing = self.mouse_firing or self.gp_firing
-            current_weapon_obj = self.weapons[self.player.current_weapon_name]
-            current_weapon_obj.render_to(r, width, height, st, at, is_ads=self.is_aiming or self.gp_aiming, is_firing=is_firing, movement_state=movement_state)
+            if not self.editor_mode:
+                movement_state = {
+                    'is_moving': abs(self.player.speed) > 0.1 or abs(self.player.strafe_speed) > 0.1, 
+                    'is_running': self.kb_running or self.gp_running
+                }
+                is_firing = self.mouse_firing or self.gp_firing
+                current_weapon_obj = self.weapons[self.player.current_weapon_name]
+                current_weapon_obj.render_to(r, width, height, st, at, is_ads=self.is_aiming or self.gp_aiming, is_firing=is_firing, movement_state=movement_state)
 
             if self.is_arena_mode:
                 arena_text = Text(_("ROUND: {}  |  KILLS: {}  |  COINS: {}").format(self.current_round, persistent.stein_kills, renpy.store.stein_session_coins), size=28, color="#FFD700", outlines=[(2, "#000", 0, 0)])
@@ -3953,7 +3956,7 @@ init -10 python:
                 return self.return_value
 
             global simulate_touch
-            if not self.mouse_initialized and not simulate_touch:
+            if not self.mouse_initialized and not simulate_touch and not self.editor_mode:
                 pygame.mouse.set_visible(False); pygame.event.set_grab(True); self.mouse_initialized = True
             if simulate_touch:
                 if ev.type in (pygame.FINGERDOWN, pygame.FINGERMOTION, pygame.FINGERUP): self.handle_multitouch_events(ev)
@@ -3998,6 +4001,23 @@ init -10 python:
                 if button_id in self.active_fingers: del self.active_fingers[button_id]
 
         def handle_pc_input(self, ev):
+            if self.editor_mode:
+                rmb_down = pygame.mouse.get_pressed()[2]
+                if rmb_down:
+                    if not self.mouse_initialized:
+                        pygame.mouse.set_visible(False); pygame.event.set_grab(True); self.mouse_initialized = True
+                else:
+                    if self.mouse_initialized:
+                        pygame.mouse.set_visible(True); pygame.event.set_grab(False); self.mouse_initialized = False
+                        self.kb_speed = 0.0; self.kb_strafe = 0.0; self.kb_dir = 0.0; self.kb_fly_up = False; self.kb_fly_down = False
+                    
+                    if ev.type != pygame.KEYUP:
+                        return
+
+                # If RMB is held, we consume the event so it doesn't reach the UI (inputs)
+                if rmb_down and ev.type in (pygame.KEYDOWN, pygame.KEYUP, pygame.MOUSEMOTION):
+                    pass 
+
             # Handle mouse look
             if ev.type == pygame.MOUSEMOTION:
                 base_sens = 0.003
@@ -4016,30 +4036,36 @@ init -10 python:
                 # Pitch (vertical look)
                 self.player.pitch -= ev.rel[1] * pitch_sensitivity
                 self.player.pitch = max(-50000.0, min(50000.0, self.player.pitch))
+                
+                if self.editor_mode and pygame.mouse.get_pressed()[2]:
+                    raise renpy.IgnoreEvent()
 
             if ev.type == pygame.KEYDOWN:
+                if self.editor_mode and not pygame.mouse.get_pressed()[2]: return 
+
                 if config.developer:
-                    if ev.key == pygame.K_o:
-                        self.builder_mode = not self.builder_mode
-                        self.player.fly_mode = self.builder_mode
-                        if self.builder_mode:
-                            self.pickup_msg = "BUILDER MODE ON"
-                            self.pickup_msg_timer = 2.0
-                        else:
-                            self.pickup_msg = "BUILDER MODE OFF"
-                            self.pickup_msg_timer = 2.0
+                    pass
+                
+                # We need to capture the movement keys before they reach the UI
+                if ev.key in (pygame.K_w, pygame.K_s, pygame.K_a, pygame.K_d, pygame.K_SPACE, pygame.K_n, pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT):
+                    # Process movement
+                    if ev.key == pygame.K_w or ev.key == pygame.K_UP: self.kb_speed = 1.0
+                    if ev.key == pygame.K_s or ev.key == pygame.K_DOWN: self.kb_speed = -1.0
+                    if ev.key == pygame.K_a: self.kb_strafe = -1.0
+                    if ev.key == pygame.K_d: self.kb_strafe = 1.0
+                    if ev.key == pygame.K_LEFT: self.kb_dir = 1.0
+                    if ev.key == pygame.K_RIGHT: self.kb_dir = -1.0
+                    
+                    if ev.key == pygame.K_SPACE: 
+                        if self.player.fly_mode: self.kb_fly_up = True
+                        else: self.player.trigger_jump()
+                    if ev.key == pygame.K_n:
+                        if self.player.fly_mode: self.kb_fly_down = True
+                        
+                    if self.editor_mode and pygame.mouse.get_pressed()[2]:
+                        raise renpy.IgnoreEvent()
 
-                    if ev.key == pygame.K_p:
-                        renpy.store.save_level_json(self.worldMap)
-                        self.pickup_msg = "LEVEL DATA SAVED"
-                        self.pickup_msg_timer = 2.0
-
-                    if ev.key == pygame.K_l:
-                        self.lock_map_expansion = not self.lock_map_expansion
-                        state = "LOCKED" if self.lock_map_expansion else "UNLOCKED"
-                        self.pickup_msg = f"MAP EXPANSION: {state}"
-                        self.pickup_msg_timer = 2.0
-
+                # Process other keys (non-movement)
                 if ev.key == pygame.K_ESCAPE:
                     pygame.mouse.set_visible(True)
                     pygame.event.set_grab(False)
@@ -4050,69 +4076,19 @@ init -10 python:
                 if ev.key == pygame.K_2: self.switch_to_slot(SLOT_HANDGUN)
                 if ev.key == pygame.K_3: self.switch_to_slot(SLOT_LONG)
                 if ev.key == pygame.K_4: self.switch_to_slot(SLOT_SPECIAL)
-
-                if ev.key == pygame.K_f:
-                    self.flashlight_on = not self.flashlight_on
-
-                if ev.key == pygame.K_w: self.kb_speed = 1.0
-                if ev.key == pygame.K_s: self.kb_speed = -1.0
-                if ev.key == pygame.K_a: self.kb_strafe = -1.0
-                if ev.key == pygame.K_d: self.kb_strafe = 1.0
-                
-                # Arrow key controls
-                if ev.key == pygame.K_UP: self.kb_speed = 1.0
-                if ev.key == pygame.K_DOWN: self.kb_speed = -1.0
-                if ev.key == pygame.K_LEFT: self.kb_dir = 1.0
-                if ev.key == pygame.K_RIGHT: self.kb_dir = -1.0
-                
-                if ev.key == pygame.K_SPACE: 
-                    if self.player.fly_mode: self.kb_fly_up = True
-                    else: self.player.trigger_jump()
-                
-                if ev.key == pygame.K_LCTRL or ev.key == pygame.K_RCTRL:
-                    self.kb_running = True
-
-                if ev.key == pygame.K_n:
-                    if self.player.fly_mode: self.kb_fly_down = True
-
-            if ev.type == pygame.MOUSEBUTTONDOWN:
-                if self.builder_mode:
-                    if ev.button == 1: # Left Click - Place
-                        self.handle_builder_action('place')
-                    elif ev.button == 3: # Right Click - Remove
-                        self.handle_builder_action('remove')
-                    elif ev.button == 4: # Wheel Up
-                        self.selected_voxel = (self.selected_voxel % int(self.num_textures)) + 1
-                        self.pickup_msg = f"VOXEL: {self.selected_voxel}"
-                        self.pickup_msg_timer = 1.0
-                    elif ev.button == 5: # Wheel Down
-                        self.selected_voxel = ((self.selected_voxel - 2) % int(self.num_textures)) + 1
-                        self.pickup_msg = f"VOXEL: {self.selected_voxel}"
-                        self.pickup_msg_timer = 1.0
-                    
-                    return 
-
-                if ev.button == 1: # Left mouse button
-                    self.mouse_firing = True
-                elif ev.button == 3: # Right mouse button (Aim)
-                    self.is_aiming = True
-            
-            if ev.type == pygame.MOUSEBUTTONUP:
-                if ev.button == 1:
-                    self.mouse_firing = False
-                elif ev.button == 3:
-                    self.is_aiming = False
+                if ev.key == pygame.K_f: self.flashlight_on = not self.flashlight_on
+                if ev.key == pygame.K_LCTRL or ev.key == pygame.K_RCTRL: self.kb_running = True
 
             if ev.type == pygame.KEYUP:
                 if ev.key == pygame.K_SPACE: self.kb_fly_up = False
                 if ev.key in (pygame.K_w, pygame.K_s, pygame.K_UP, pygame.K_DOWN): self.kb_speed = 0.0
                 if ev.key in (pygame.K_a, pygame.K_d): self.kb_strafe = 0.0
                 if ev.key in (pygame.K_LEFT, pygame.K_RIGHT): self.kb_dir = 0.0
-                if ev.key in (pygame.K_LCTRL, pygame.K_RCTRL): 
-                    self.kb_running = False
+                if ev.key in (pygame.K_LCTRL, pygame.K_RCTRL): self.kb_running = False
+                if ev.key == pygame.K_n: self.kb_fly_down = False
                 
-                if ev.key == pygame.K_n:
-                    self.kb_fly_down = False
+                if self.editor_mode and pygame.mouse.get_pressed()[2]:
+                    raise renpy.IgnoreEvent()
 
         def poll_gamepad(self):
             self.gp_speed = 0.0; self.gp_strafe = 0.0; self.gp_dir = 0.0

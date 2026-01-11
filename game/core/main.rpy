@@ -93,7 +93,7 @@ init python:
                 full_path = filename
             else:
                 print("File not found: " + full_path)
-                return None
+                return {} # Return empty dict instead of None
                 
         try:
             with open(full_path, "r") as f:
@@ -121,7 +121,7 @@ init python:
             return data
         except Exception as e:
             print("Error loading map: " + str(e))
-            return None
+            return {}
 
     def load_object_json(filename):
         """
@@ -165,6 +165,138 @@ init python:
         except Exception as e:
             print("Error loading object: " + str(e))
             return None
+
+    def save_anim_json(anim_data, name="anim"):
+        """
+        Saves animation data to game/save_anims/name.json.
+        Expects anim_data to be a dictionary with 'meta' and 'tracks'.
+        """
+        if name is None:
+            name = "anim_{}".format(int(time.time()))
+        
+        if name.endswith(".json"):
+            name = name[:-5]
+
+        save_dir = os.path.join(config.gamedir, "save_anims")
+        if not os.path.exists(save_dir):
+            try:
+                os.makedirs(save_dir)
+            except:
+                pass
+        
+        filename = name + ".json"
+        full_path = os.path.join(save_dir, filename)
+        
+        try:
+            with open(full_path, "w") as f:
+                json.dump(anim_data, f, indent=4)
+            renpy.notify("Anim saved: " + filename)
+            print("Animation saved to " + full_path)
+        except Exception as e:
+            renpy.notify("Error saving animation!")
+            print("Error saving animation: " + str(e))
+
+    def load_anim_json(filename):
+        """
+        Loads animation data from game/save_anims/filename.
+        Returns a dictionary or None on error.
+        """
+        save_dir = os.path.join(config.gamedir, "save_anims")
+        full_path = os.path.join(save_dir, filename)
+        
+        if not os.path.exists(full_path):
+            if os.path.exists(filename):
+                full_path = filename
+            else:
+                print("Anim file not found: " + full_path)
+                return None
+                
+        try:
+            with open(full_path, "r") as f:
+                data = json.load(f)
+            return data
+        except Exception as e:
+            print("Error loading animation: " + str(e))
+            return None
+
+    def get_anim_files():
+        """Returns a sorted list of .json files in game/save_anims/"""
+        save_dir = os.path.join(config.gamedir, "save_anims")
+        if not os.path.exists(save_dir):
+            try: os.makedirs(save_dir)
+            except: pass
+            return []
+        
+        try:
+            files = [f for f in os.listdir(save_dir) if f.endswith(".json")]
+            return sorted(files)
+        except:
+            return []
+
+    def get_object_files():
+        """Returns a sorted list of .json files in game/save_objects/"""
+        save_dir = os.path.join(config.gamedir, "save_objects")
+        if not os.path.exists(save_dir):
+            try: os.makedirs(save_dir)
+            except: pass
+            return []
+        
+        try:
+            files = [f for f in os.listdir(save_dir) if f.endswith(".json")]
+            return sorted(files)
+        except:
+            return []
+
+    def load_object_into_editor(renderer_obj, filename):
+        """
+        Loads an object file into the provided renderer instance, updating map and camera.
+        """
+        import math
+        data = load_object_json(filename)
+        
+        if data:
+            # Update Map Data
+            renderer_obj.worldMap = data
+            renderer_obj.map_data = data
+            
+            # Recalculate Dimensions
+            if isinstance(data, dict) or hasattr(data, 'items'):
+                max_x = 0
+                max_y = 0
+                for grid in data.values():
+                    if len(grid) > max_x: max_x = len(grid)
+                    if len(grid) > 0 and len(grid[0]) > max_y: max_y = len(grid[0])
+                renderer_obj.mapWidth = max_x
+                renderer_obj.mapHeight = max_y
+            else:
+                s_mapWidth = len(data)
+                if s_mapWidth > 0:
+                    renderer_obj.mapWidth = s_mapWidth
+                    renderer_obj.mapHeight = len(data[0])
+                else:
+                    renderer_obj.mapWidth = 0
+                    renderer_obj.mapHeight = 0
+            
+            renderer_obj.map_w = renderer_obj.mapWidth
+            renderer_obj.map_h = renderer_obj.mapHeight
+            
+            # Regenerate Texture
+            renderer_obj.map_texture = renderer_obj.create_map_texture()
+            
+            # Reset Camera
+            center_x = renderer_obj.mapWidth / 2.0
+            renderer_obj.player.x = center_x
+            renderer_obj.player.y = -5.0
+            renderer_obj.player.z = 0.0
+            
+            # Look North (Positive Y)
+            renderer_obj.player.rot = math.pi / 2.0 
+            renderer_obj.player.pitch = 0.0
+            
+            # Reset Physics
+            renderer_obj.player.velocity_z = 0.0
+            
+            renpy.restart_interaction()
 
     if 's' in config.keymap['screenshot']:
         config.keymap['screenshot'].remove('s')
@@ -405,6 +537,10 @@ init python:
             level_data = level1_data
 
         renpy.store.worldMap = level_data["worldMap"]
+        if renpy.store.worldMap is None:
+            print("reset_stein_state: worldMap was None, initializing empty map.")
+            renpy.store.worldMap = {}
+        
         renpy.store.exits = level_data["exits"]
         renpy.store.player_x = level_data["player_x"]
         renpy.store.player_y = level_data["player_y"]
@@ -572,3 +708,215 @@ label test_gpu:
     $ reset_stein_state(level=1)
     call screen gpu_stein_test
     return
+
+screen animation_editor():
+    # Variables for layout
+    default editor_viewport_width = 1280 - 300
+    default editor_viewport_height = 720 - 200
+    
+    # Variables for selected object transformation
+    default obj_x = "0.0"
+    default obj_y = "0.0"
+    default obj_z = "0.0"
+    
+    default editing_field = None
+    
+    # Animation Editor State
+    default current_anim_name = "new_anim"
+    default current_anim_data = { "meta": { "name": "new_anim", "duration": 2.0, "loop": True }, "tracks": {} }
+    default anim_file_list = get_anim_files()
+    
+    # Object Explorer State
+    default explorer_tab = "anims" # "anims" or "objects"
+    default object_file_list = get_object_files()
+    default current_object_name = "None"
+
+    default renderer = GPURenpystein(
+        editor_viewport_width, editor_viewport_height,
+        worldMap=worldMap,
+        exits=exits,
+        objects=stein_objects,
+        internal_width=editor_viewport_width // 2,
+        internal_height=editor_viewport_height // 2,
+        lighting_preset=stein_current_lighting,
+        editor_mode=True
+    )
+    
+    # Background
+    button:
+        action SetScreenVariable("editing_field", None)
+        background Solid("#111")
+        xfill True yfill True
+
+    key "K_ESCAPE" action SetScreenVariable("editing_field", None)
+
+    # Main layout: hbox separating (viewport+bottom) from (right sidebar)
+    hbox:
+        # Left column: viewport + bottom toolbar
+        vbox:
+            # 3D viewport area
+            frame:
+                background Solid("#222")
+                xsize editor_viewport_width
+                ysize editor_viewport_height
+                padding (0,0)
+                
+                # The 3D renderer
+                add renderer
+
+            # Bottom toolbar
+            frame:
+                background Solid("#333")
+                xsize editor_viewport_width
+                ysize 200
+                padding (10, 10)
+                
+                hbox:
+                    spacing 20
+                    
+                    # Left: timeline area
+                    vbox:
+                        xsize int(editor_viewport_width * 0.6)
+                        spacing 5
+                        text "Timeline / Animation Keys" size 20 color "#FFF"
+                        null height 10
+                        hbox:
+                            spacing 10
+                            textbutton "|<" action None
+                            textbutton "<" action None
+                            textbutton "Play" action None
+                            textbutton ">" action None
+                            textbutton ">|" action None
+                            
+                            null width 50
+                            text "Frame: 0" color "#AAA" yalign 0.5
+                    
+                    # Separator
+                    add Solid("#444") xsize 2 ysize 180
+                    
+                    # Right: tabbed file explorer
+                    vbox:
+                        spacing 5
+                        
+                        # Tabs
+                        hbox:
+                            spacing 0
+                            textbutton "Animations":
+                                background Solid("#333" if explorer_tab == "anims" else "#222")
+                                xsize 100 ysize 25
+                                text_size 14 text_color ("#FFF" if explorer_tab == "anims" else "#888") text_align 0.5
+                                action SetScreenVariable("explorer_tab", "anims")
+                            textbutton "Objects":
+                                background Solid("#333" if explorer_tab == "objects" else "#222")
+                                xsize 100 ysize 25
+                                text_size 14 text_color ("#FFF" if explorer_tab == "objects" else "#888") text_align 0.5
+                                action SetScreenVariable("explorer_tab", "objects")
+
+                        # Content area
+                        frame:
+                            background Solid("#222")
+                            xfill True
+                            ysize 110 # Slightly taller to fit content
+                            padding (5,5)
+                            
+                            if explorer_tab == "anims":
+                                viewport:
+                                    scrollbars "vertical"
+                                    mousewheel True
+                                    vbox:
+                                        for f in anim_file_list:
+                                            textbutton f:
+                                                text_size 14 
+                                                text_color "#CCC" 
+                                                text_hover_color "#FFF" 
+                                                action [SetScreenVariable("current_anim_name", f.replace(".json", "")), SetScreenVariable("current_anim_data", load_anim_json(f))]
+                            
+                            elif explorer_tab == "objects":
+                                viewport:
+                                    scrollbars "vertical"
+                                    mousewheel True
+                                    vbox:
+                                        for f in object_file_list:
+                                            textbutton f:
+                                                text_size 14 
+                                                text_color "#CCC" 
+                                                text_hover_color "#FFF" 
+                                                action [
+                                                    SetScreenVariable("current_object_name", f.replace(".json", "")),
+                                                    SetScreenVariable("current_anim_name", "new_anim"),
+                                                    SetScreenVariable("current_anim_data", { "meta": { "name": "new_anim", "duration": 2.0, "loop": True }, "tracks": {} }),
+                                                    Function(load_object_into_editor, renderer, f)
+                                                ]
+
+                        # Footer Controls
+                        if explorer_tab == "anims":
+                            hbox:
+                                spacing 10
+                                text "Name:" color "#AAA" yalign 0.5 size 14
+                                
+                                if editing_field == "anim_name":
+                                    input value ScreenVariableInputValue("current_anim_name") length 20 color "#FFF" pixel_width 120 action SetScreenVariable("editing_field", None)
+                                else:
+                                    textbutton "[current_anim_name]" action SetScreenVariable("editing_field", "anim_name") text_color "#FFF" text_size 14 yalign 0.5
+
+                                textbutton "Save" action [Function(save_anim_json, current_anim_data, current_anim_name), SetScreenVariable("anim_file_list", get_anim_files())] text_color "#8F8" text_size 14 yalign 0.5
+                                textbutton "Refresh" action SetScreenVariable("anim_file_list", get_anim_files()) text_color "#FF8" text_size 14 yalign 0.5
+                        
+                        elif explorer_tab == "objects":
+                            hbox:
+                                spacing 10
+                                text "Selected:" color "#AAA" yalign 0.5 size 14
+                                text "[current_object_name]" color "#FFF" yalign 0.5 size 14
+                                
+                                null width 20
+                                textbutton "Refresh List" action SetScreenVariable("object_file_list", get_object_files()) text_color "#FF8" text_size 14 yalign 0.5
+
+        # Right ridebar (properties / outliner)
+        frame:
+            background Solid("#2b2b2b")
+            xsize 300
+            ysize 720
+            padding (10, 10)
+            
+            vbox:
+                spacing 10
+                
+                text "Properties" size 24 color "#FFF"
+                null height 10
+                
+                text "Selected Object:" size 18 color "#AAA"
+                text "[current_object_name]" size 16 color "#FFF"
+                
+                null height 20
+                
+                textbutton "Add Keyframe" action None xfill True
+                textbutton "Remove Keyframe" action None xfill True
+                
+                null height 20
+                
+                text "Transform" size 18 color "#AAA"
+                hbox:
+                    text "X: " color "#AAA" yalign 0.5
+                    if editing_field == "x":
+                        input value ScreenVariableInputValue("obj_x") length 10 color "#FFF" pixel_width 150 action SetScreenVariable("editing_field", None)
+                    else:
+                        textbutton "[obj_x]" action SetScreenVariable("editing_field", "x") text_color "#FFF"
+                hbox:
+                    text "Y: " color "#AAA" yalign 0.5
+                    if editing_field == "y":
+                        input value ScreenVariableInputValue("obj_y") length 10 color "#FFF" pixel_width 150 action SetScreenVariable("editing_field", None)
+                    else:
+                        textbutton "[obj_y]" action SetScreenVariable("editing_field", "y") text_color "#FFF"
+                hbox:
+                    text "Z: " color "#AAA" yalign 0.5
+                    if editing_field == "z":
+                        input value ScreenVariableInputValue("obj_z") length 10 color "#FFF" pixel_width 150 action SetScreenVariable("editing_field", None)
+                    else:
+                        textbutton "[obj_z]" action SetScreenVariable("editing_field", "z") text_color "#FFF"
+
+    textbutton "Exit Editor" action Return() align (1.0, 0.0) offset (-10, -10)
+
+label start_animation_editor:
+    $ reset_stein_state(level=5)
+    call screen animation_editor
+    jump sayoristein_main_menu
