@@ -3105,11 +3105,11 @@ init -10 python:
                 if n == 0: return 1
                 return 2**math.ceil(math.log(n, 2))
             
-            if isinstance(self.map_data, list):
-                layers = {0: self.map_data}
+            if isinstance(self.worldMap, list):
+                layers = {0: self.worldMap}
             else:
                 layers = {}
-                for k, v in self.map_data.items():
+                for k, v in self.worldMap.items():
                     try:
                         layers[int(k)] = v
                     except (ValueError, TypeError):
