@@ -2538,6 +2538,7 @@ init -10 python:
             self.kb_fly_up = False
             self.kb_fly_down = False
             self.builder_mode = False
+            self.lock_map_expansion = False
             self.selected_voxel = 1
             
             if config.developer:
@@ -3874,11 +3875,19 @@ init -10 python:
                 y = 0
             
             if off_x > 0 or off_y > 0:
+                if self.lock_map_expansion:
+                    self.pickup_msg = "MAP EXPANSION LOCKED"
+                    self.pickup_msg_timer = 1.0
+                    return
                 self.shift_map(off_x, off_y)
                 map_changed = True
             
             # Check for expansion
             if x >= self.mapWidth or y >= self.mapHeight:
+                if self.lock_map_expansion:
+                    self.pickup_msg = "MAP EXPANSION LOCKED"
+                    self.pickup_msg_timer = 1.0
+                    return
                 new_w = max(self.mapWidth, x + 1)
                 new_h = max(self.mapHeight, y + 1)
                 self.expand_map(new_w, new_h)
@@ -4023,6 +4032,12 @@ init -10 python:
                     if ev.key == pygame.K_p:
                         renpy.store.save_level_json(self.worldMap)
                         self.pickup_msg = "LEVEL DATA SAVED"
+                        self.pickup_msg_timer = 2.0
+
+                    if ev.key == pygame.K_l:
+                        self.lock_map_expansion = not self.lock_map_expansion
+                        state = "LOCKED" if self.lock_map_expansion else "UNLOCKED"
+                        self.pickup_msg = f"MAP EXPANSION: {state}"
                         self.pickup_msg_timer = 2.0
 
                 if ev.key == pygame.K_ESCAPE:
