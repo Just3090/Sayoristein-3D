@@ -73,7 +73,7 @@ init python:
         
         try:
             with open(full_path, "w") as f:
-                json.dump(world_map, f, indent=4)
+                json.dump(world_map, f, separators=(',', ':'))
             renpy.notify("Map saved: " + filename)
             print("Map saved to " + full_path)
         except Exception as e:
@@ -195,7 +195,7 @@ init python:
     # --- Level 1 Data ---
     level1_data = {
         "lighting": "day",
-        "worldMap": load_level_json("reference_one_voxel.json"),
+        "worldMap": load_level_json("template_16.json"),
         "player_x": 5.5, "player_y": 4.5,
         "player_dirx": -1.0, "player_diry": 0.0,
         "player_planex": 0.0, "player_planey": 0.66,
