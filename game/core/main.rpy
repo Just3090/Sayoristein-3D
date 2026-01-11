@@ -431,7 +431,9 @@ init python:
         "player_dirx": -1.0, "player_diry": 0.0,
         "player_planex": 0.0, "player_planey": 0.66,
         "enemies": [
-            # (18.5, 10.5, 4, 5), (5.5, 16.5, 4, 5)
+            # (X, Y, Filename/Tex, DeadTex, HP, TypeID)
+            # Type ENEMY_TYPE_VOXEL_BASIC = Voxel Enemy
+            # (8.0, 8.0, "template_16.json", 0, 100, ENEMY_TYPE_VOXEL_BASIC)
         ],
         "sprites": [
             # (20.5, 11.5, 2), (18.5,4.5, 2), (10.0,4.5, 2), (10.0,12.5,2),

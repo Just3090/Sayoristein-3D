@@ -1026,6 +1026,8 @@ init -10 python:
             float texID = spriteData.z;
             float spritePitch = spriteData.w; 
 
+            if (texID > 200.0) continue;
+
             float spX = spritePos.x - u_player_pos.x;
             float spY = spritePos.y - u_player_pos.y;
 
@@ -1685,8 +1687,14 @@ init -10 python:
                                     renpy.sound.play("sounds/ow.ogg", channel="audio")
                                     if enemy.health <= 0:
                                         if self.wm.is_arena_mode: persistent.stein_kills += 1
-                                        if enemy in self.wm.enemies: self.wm.enemies.remove(enemy)
-                                        self.wm.sprite_positions.append((enemy.x, enemy.y, enemy.destroyed_texture_index))
+                                        if enemy in self.wm.enemies: 
+                                            self.wm.enemies.remove(enemy)
+                                            # Clean up Voxel Visuals
+                                            if hasattr(enemy, 'visual') and enemy.visual in self.wm.scene_objects:
+                                                self.wm.scene_objects.remove(enemy.visual)
+
+                                        if getattr(enemy, 'texture_index', 0) != 255:
+                                            self.wm.sprite_positions.append((enemy.x, enemy.y, enemy.destroyed_texture_index))
                                         
                                         if self.wm.is_arena_mode:
                                             drop_prob = 1.0 if enemy.coin_index == 12 else 0.35
@@ -1820,6 +1828,32 @@ init -10 python:
             )
             
             renpy.sound.play("sounds/e-gunshot.ogg", channel="audio")
+
+    class VoxelEnemy(Guard):
+        def __init__(self, wm, x, y, filename, health=100):
+            super(VoxelEnemy, self).__init__(wm, x, y, 255, 0, health=health)
+            self.filename = filename
+            
+            # Load model parts (voxel model)
+            parts = wm.loaded_models.get(filename, [])
+            if isinstance(parts, int): parts = [(0,0,0, parts)]
+            
+            # Create the SceneObject for visual representation
+            self.visual = SceneObject(x, y, 0.0, filename, model_parts=parts)
+            
+            # Register it with the renderer's scene_objects list so it gets drawn
+            wm.scene_objects.append(self.visual)
+
+        def update(self, dt, player):
+            # Guard.update logic (movement, attack)
+            super(VoxelEnemy, self).update(dt, player)
+            
+            # Sync visual position with logical position
+            self.visual.x = self.x
+            self.visual.y = self.y
+            
+            ground_z = self.wm.player.get_ground_height_at(self.x, self.y)
+            self.visual.z = ground_z
 
     class Yuritler(Guard):
         def __init__(self, wm, x, y, health=150):
@@ -2459,6 +2493,225 @@ init -10 python:
             self.rot_z = 0.0
             self.visible = True
 
+    class VoxelEntity(object):
+        def __init__(self, wm, x, y, z, filename=MODEL_VOXEL_BASIC, health=100, damage=10, speed=2.0, attack_range=12.0, cooldown=1.5):
+            self.wm = wm
+            self.x = float(x)
+            self.y = float(y)
+            self.z = float(z)
+            self.health = health
+            self.dead = False
+            self.filename = filename
+            
+            # Combat Stats
+            self.damage = damage
+            self.move_speed = speed
+            self.attack_range = attack_range
+            self.attack_cooldown = cooldown
+            
+            self.attack_timer = 1.0
+            self.bullet_texture_index = 6
+            self.texture_index = 255 
+            
+            # Load model parts
+            parts = wm.loaded_models.get(filename, [])
+            if isinstance(parts, int): parts = [(0,0,0, parts)]
+            
+            self.model_parts = parts
+            
+            # Calculate AABB
+            self.min_x = 0.0; self.min_y = 0.0; self.min_z = 0.0
+            self.max_x = 1.0; self.max_y = 1.0; self.max_z = 1.0
+            
+            if parts:
+                xs = [p[0] for p in parts]
+                ys = [p[1] for p in parts]
+                zs = [p[2] for p in parts]
+                self.min_x = min(xs)
+                self.min_y = min(ys)
+                self.min_z = min(zs)
+                self.max_x = max(xs) + 1.0
+                self.max_y = max(ys) + 1.0
+                self.max_z = max(zs) + 1.0
+            
+            # Visual
+            self.visual = SceneObject(x, y, z, filename, model_parts=parts)
+            wm.scene_objects.append(self.visual)
+
+        def get_world_aabb(self):
+            return (
+                self.x + self.min_x, self.y + self.min_y, self.z + self.min_z,
+                self.x + self.max_x, self.y + self.max_y, self.z + self.max_z
+            )
+
+        def check_collision(self, px, py, pz):
+            min_x, min_y, min_z, max_x, max_y, max_z = self.get_world_aabb()
+            return (px >= min_x and px <= max_x and
+                    py >= min_y and py <= max_y and
+                    pz >= min_z and pz <= max_z)
+
+        def has_line_of_sight(self, target_x, target_y):
+            map_address, _ = self.wm.flat_map_buffer.buffer_info()
+            check_z = self.wm.player.z + 1.6
+            return stein_core.check_line_of_sight(
+                self.x, self.y, check_z,
+                target_x, target_y,
+                map_address,
+                self.wm.mapWidth, self.wm.mapHeight, 
+                self.wm.num_layers, self.wm.min_layer
+            )
+
+        def attack(self, player):
+            self.attack_timer = self.attack_cooldown
+            dir_x = player.x - self.x
+            dir_y = player.y - self.y
+            dist = math.sqrt(dir_x**2 + dir_y**2)
+            
+            if dist > 0:
+                dir_x /= dist
+                dir_y /= dist
+            
+            self.wm.spawn_projectile(
+                self.x, self.y, self.z + 0.8, 
+                dir_x, dir_y, 0.0,
+                12.0, 
+                self.bullet_texture_index, 
+                self.damage, 
+                False
+            )
+            renpy.sound.play("sounds/e-gunshot.ogg", channel="audio")
+
+        def take_damage(self, amount):
+            self.health -= amount
+            if self.health <= 0:
+                self.die()
+                return True
+            return True
+
+        def die(self):
+            if not self.dead:
+                self.dead = True
+                if self.visual in self.wm.scene_objects:
+                    self.wm.scene_objects.remove(self.visual)
+
+        def update(self, dt, player):
+            if self.dead: return
+            self.attack_timer = max(0, self.attack_timer - dt)
+            
+            dx = player.x - self.x
+            dy = player.y - self.y
+            dist = math.sqrt(dx*dx + dy*dy)
+            
+            if dist < self.attack_range:
+                if self.has_line_of_sight(player.x, player.y):
+                    if self.attack_timer <= 0:
+                        self.attack(player)
+            
+            if dist > 2.0 and dist < 25.0:
+                step = self.move_speed * dt
+                dir_x = (dx / dist) * step
+                dir_y = (dy / dist) * step
+                
+                # Collision Logic
+                try:
+                    map_addr, _ = self.wm.flat_map_buffer.buffer_info()
+                    nx, ny = SteinWrapper.resolve_movement(
+                        self.x, self.y, self.z,
+                        dir_x, dir_y,
+                        0.4, # Enemy Radius
+                        map_addr,
+                        self.wm.mapWidth, self.wm.mapHeight, self.wm.num_layers, self.wm.min_layer
+                    )
+                    self.x = nx
+                    self.y = ny
+                except:
+                    pass
+            
+            self.visual.x = self.x
+            self.visual.y = self.y
+            self.visual.z = self.z
+
+    class VoxelSniper(VoxelEntity):
+        def __init__(self, wm, x, y, z, filename=MODEL_VOXEL_SNIPER, health=80):
+            super(VoxelSniper, self).__init__(wm, x, y, z, filename, health, damage=25, speed=3.5, attack_range=20.0, cooldown=2.0)
+            self.dodge_cooldown = 4.0
+            self.dodge_timer = 0.0
+            self.bullet_texture_index = 14 # Sniper bullet
+
+        def update(self, dt, player):
+            self.dodge_timer = max(0, self.dodge_timer - dt)
+            super(VoxelSniper, self).update(dt, player)
+
+        def take_damage(self, amount):
+            if self.dodge_timer <= 0:
+                self.dodge_timer = self.dodge_cooldown
+                
+                # Dodge Logic (basic)
+                dx = self.wm.player.x - self.x
+                dy = self.wm.player.y - self.y
+                dist = math.sqrt(dx*dx + dy*dy)
+                
+                if dist > 0:
+                    ndx = dx / dist
+                    ndy = dy / dist
+                    # Strafe vector
+                    strafe_x = -ndy
+                    strafe_y = ndx
+                    
+                    # Randomize direction
+                    if renpy.random.random() < 0.5:
+                        strafe_x = -strafe_x
+                        strafe_y = -strafe_y
+                    
+                    dodge_dist = 2.5
+                    
+                    self.x += strafe_x * dodge_dist
+                    self.y += strafe_y * dodge_dist
+                    
+                    # Instant visual update
+                    self.visual.x = self.x
+                    self.visual.y = self.y
+                    
+                    renpy.sound.play("sounds/pew.ogg", channel="audio") # Dash sound
+                    return False # Dodged
+            
+            return super(VoxelSniper, self).take_damage(amount)
+
+    class VoxelElite(VoxelEntity):
+        def __init__(self, wm, x, y, z, filename=MODEL_VOXEL_ELITE, health=100):
+            super(VoxelElite, self).__init__(wm, x, y, z, filename, health, damage=3, speed=2.5, attack_range=15.0, cooldown=0.1)
+            self.burst_limit = 10
+            self.shots_fired_in_burst = 0
+            self.is_reloading = False
+            self.reload_time = 5.0
+            self.reload_timer = 0.0
+
+        def update(self, dt, player):
+            if self.is_reloading:
+                self.reload_timer -= dt
+                if self.reload_timer <= 0:
+                    self.is_reloading = False
+                    self.shots_fired_in_burst = 0
+                    self.attack_timer = 0.5
+            super(VoxelElite, self).update(dt, player)
+
+        def attack(self, player):
+            if self.is_reloading: return
+            
+            # Call base attack
+            super(VoxelElite, self).attack(player)
+            
+            # Burst Logic
+            self.shots_fired_in_burst += 1
+            if self.shots_fired_in_burst >= self.burst_limit:
+                self.is_reloading = True
+                self.reload_timer = self.reload_time
+
+    class VoxelYuritler(VoxelEntity):
+        def __init__(self, wm, x, y, z, filename=MODEL_VOXEL_YURITLER, health=150):
+            super(VoxelYuritler, self).__init__(wm, x, y, z, filename, health, damage=5, speed=1.8, attack_range=12.0, cooldown=1.0)
+
+
     class GPURenpystein(renpy.Displayable):
         def __init__(self, width, height, worldMap, exits=[], objects=[], internal_width=None, internal_height=None, lighting_preset=None, editor_mode=False, **kwargs):
             super(GPURenpystein, self).__init__(**kwargs)
@@ -2533,7 +2786,37 @@ init -10 python:
             
             self.map_texture = self.create_map_texture()
             self.wall_atlas, self.num_textures = self.create_wall_atlas()
-            self.model_atlas, self.num_models = self.create_model_atlas(objects)
+            
+            # Prepare objects list for atlas generation (models)
+            atlas_objects = list(objects)
+
+            # Pre-scan enemies to include their models in atlas generation
+            if hasattr(renpy.store, 'stein_enemies'):
+                for e_data in renpy.store.stein_enemies:
+                    type_id = e_data[5] if len(e_data) > 5 else 0
+                    # Voxel Enemies range (100+)
+                    if type_id >= 100:
+                        filename = e_data[2] if len(e_data) > 2 else ""
+                        if filename:
+                            # Add dummy object entry so create_model_atlas loads the file
+                            atlas_objects.append((0,0,0, filename))
+
+            # Pre-load arena models if in Arena Mode
+            if self.is_arena_mode:
+                potential_models = [
+                    renpy.store.MODEL_VOXEL_BASIC,
+                    renpy.store.MODEL_VOXEL_SNIPER,
+                    renpy.store.MODEL_VOXEL_ELITE,
+                    renpy.store.MODEL_VOXEL_YURITLER
+                ]
+                # Filter None or empty
+                potential_models = list(set([m for m in potential_models if m]))
+                
+                for m in potential_models:
+                    atlas_objects.append((0,0,0, m))
+
+            self.model_atlas, self.num_models = self.create_model_atlas(atlas_objects)
+
 
             self.scene_objects = []
             if objects:
@@ -2761,6 +3044,7 @@ init -10 python:
 
             self.projectiles = []
             self.enemies = []
+            self.voxel_entities = []
             self.sprite_positions = renpy.store.stein_sprites
             
             self.inter_round_timer = getattr(renpy.store, 'stein_inter_round_timer', 0.0)
@@ -2771,16 +3055,42 @@ init -10 python:
             
             if hasattr(renpy.store, 'stein_enemies'):
                 for e_data in renpy.store.stein_enemies:
-                    x, y, tex, dead_tex = e_data[0], e_data[1], e_data[2], e_data[3]
+                    x, y = e_data[0], e_data[1]
+                    tex = e_data[2] if len(e_data) > 2 else 0
+                    dead_tex = e_data[3] if len(e_data) > 3 else 0
                     health = e_data[4] if len(e_data) > 4 else 100
                     type_id = e_data[5] if len(e_data) > 5 else 0
                     
-                    if type_id == 1: new_e = Yuritler(self, x, y, health=health)
-                    elif type_id == 2: new_e = EliteGuard(self, x, y, health=health)
-                    elif type_id == 3: new_e = Sniper(self, x, y, health=health)
-                    else: new_e = Guard(self, x, y, tex, dead_tex, health=health)
+                    if type_id == ENEMY_TYPE_VOXEL_BASIC:
+                        # Voxel Entity
+                        filename = tex 
+                        new_ve = VoxelEntity(self, x, y, 0.0, filename, health=health)
+                        self.voxel_entities.append(new_ve)
                     
-                    self.enemies.append(new_e)
+                    elif type_id == ENEMY_TYPE_VOXEL_SNIPER:
+                        # Voxel Sniper
+                        filename = tex
+                        new_ve = VoxelSniper(self, x, y, 0.0, filename, health=health)
+                        self.voxel_entities.append(new_ve)
+
+                    elif type_id == ENEMY_TYPE_VOXEL_ELITE:
+                        filename = tex
+                        new_ve = VoxelElite(self, x, y, 0.0, filename, health=health)
+                        self.voxel_entities.append(new_ve)
+
+                    elif type_id == ENEMY_TYPE_VOXEL_YURITLER:
+                        filename = tex
+                        new_ve = VoxelYuritler(self, x, y, 0.0, filename, health=health)
+                        self.voxel_entities.append(new_ve)
+                    
+                    # elif type_id == ENEMY_TYPE_YURITLER: 
+                    #     self.enemies.append(Yuritler(self, x, y, health=health))
+                    # elif type_id == ENEMY_TYPE_ELITE: 
+                    #     self.enemies.append(EliteGuard(self, x, y, health=health))
+                    # elif type_id == ENEMY_TYPE_SNIPER: 
+                    #     self.enemies.append(Sniper(self, x, y, health=health))
+                    # else: 
+                    #     self.enemies.append(Guard(self, x, y, tex, dead_tex, health=health))
 
             if self.is_arena_mode and self.current_round == 0:
                 self.start_next_round()
@@ -2831,12 +3141,12 @@ init -10 python:
 
         def start_next_round(self):
             self.current_round += 1
-            # renpy.sound.play("sounds/music/round_start.ogg", channel="audio")
             
             # Clean up bodies
-            # Original uses: [s for s in self.sprite_positions if s[2] != 5] (Guard dead texture is 5)
-            # Guard/Elite/Sniper dead: 5. Yuritler dead: 10
             self.sprite_positions = [s for s in self.sprite_positions if s[2] not in (5, 10)]
+            
+            self.enemies = [e for e in self.enemies if e.health > 0]
+            self.voxel_entities = [ve for ve in self.voxel_entities if ve.health > 0]
             
             if not self.spawn_points:
                 self.spawn_points = [(1.5, 1.5), (self.mapWidth-1.5, 1.5), (self.mapWidth/2.0, self.mapHeight/2.0)]
@@ -2845,14 +3155,13 @@ init -10 python:
             for _ in range(self.current_round):
                 if not self.spawn_points: break
                 sx, sy = renpy.random.choice(self.spawn_points)
-                
                 x = sx + 0.5 + (renpy.random.random() - 0.5) * 0.6
                 y = sy + 0.5 + (renpy.random.random() - 0.5) * 0.6
                 
-                new_enemy = Guard(self, x, y, 4, 5, health=100)
+                new_enemy = VoxelEntity(self, x, y, 0.0, MODEL_VOXEL_BASIC, health=100)
                 new_enemy.state = 'chasing'
-                new_enemy.moveSpeed += (renpy.random.random() - 0.5) * 0.2
-                self.enemies.append(new_enemy)
+                new_enemy.move_speed += (renpy.random.random() - 0.5) * 0.2
+                self.voxel_entities.append(new_enemy)
 
             # Spawn Yuritler
             spawn_yuritler = False
@@ -2870,9 +3179,9 @@ init -10 python:
                     y = sy + 0.5 + (renpy.random.random() - 0.5) * 0.6
                     
                     boss_hp = 150 + ((self.yuritler_count - 1) * 50)
-                    boss = Yuritler(self, x, y, health=boss_hp)
+                    boss = VoxelYuritler(self, x, y, 0.0, MODEL_VOXEL_YURITLER, health=boss_hp)
                     boss.state = 'chasing'
-                    self.enemies.append(boss)
+                    self.voxel_entities.append(boss)
 
             # pawn Elite Guards (Every 5 Rounds)
             if self.current_round % 5 == 0:
@@ -2883,10 +3192,10 @@ init -10 python:
                     x = sx + 0.5 + (renpy.random.random() - 0.5) * 0.6
                     y = sy + 0.5 + (renpy.random.random() - 0.5) * 0.6
                     
-                    elite = EliteGuard(self, x, y, health=100)
+                    elite = VoxelElite(self, x, y, 0.0, MODEL_VOXEL_ELITE, health=100)
                     elite.state = 'chasing'
-                    elite.moveSpeed += (renpy.random.random() - 0.5) * 0.2
-                    self.enemies.append(elite)
+                    elite.move_speed += (renpy.random.random() - 0.5) * 0.2
+                    self.voxel_entities.append(elite)
 
             # Spawn Snipers (Odd Rounds, 50% chance)
             if self.current_round % 2 != 0:
@@ -2898,9 +3207,9 @@ init -10 python:
                         x = sx + 0.5 + (renpy.random.random() - 0.5) * 0.6
                         y = sy + 0.5 + (renpy.random.random() - 0.5) * 0.6
                         
-                        sniper = Sniper(self, x, y, health=100)
+                        sniper = VoxelSniper(self, x, y, 0.0, MODEL_VOXEL_SNIPER, health=100)
                         sniper.state = 'chasing'
-                        self.enemies.append(sniper)
+                        self.voxel_entities.append(sniper)
             
             self.inter_round_timer = 0.0
 
@@ -3010,12 +3319,12 @@ init -10 python:
             return renpy.display.draw.load_texture(atlas), float(num_tex)
 
         def create_model_atlas(self, objects_def):
+            self.loaded_models = {}
             if not objects_def:
                 s = pygame.Surface((1,1), flags=pygame.SRCALPHA, depth=32)
                 return renpy.display.draw.load_texture(s), 0.0
 
             unique_files = sorted(list(set([o[3] for o in objects_def])))
-            self.loaded_models = {} # list of (offset_x, offset_y, offset_z, atlas_id)
 
             # Temporary structure to hold all identified chunks from all models
             # List of { 'grid': {z: [[rows]]}, 'filename': str }
@@ -3552,6 +3861,24 @@ init -10 python:
                 map_addr, self.mapWidth, self.mapHeight, 
                 self.num_layers, self.min_layer
             )
+            
+            if hasattr(self, 'voxel_entities'):
+                for ve in self.voxel_entities:
+                    ve.update(dt, self.player)
+                
+                for i in range(self.MAX_PROJECTILES):
+                    p = self.proj_array[i]
+                    if p.active == 1 and p.from_player == 1:
+                        for ve in self.voxel_entities:
+                            if ve.dead: continue
+                            if ve.check_collision(p.x, p.y, p.z):
+                                p.active = 0 # Destroy projectile
+                                
+                                self.hit_marker_timer = 0.15
+                                renpy.sound.play("sounds/ow.ogg", channel="audio")
+                                
+                                ve.take_damage(p.damage)
+                                break
 
             dead_enemies = set()
 
@@ -3613,7 +3940,8 @@ init -10 python:
                     self.inter_round_timer -= dt
                     if self.inter_round_timer <= 0:
                         self.start_next_round()
-                elif len(self.enemies) == 0 and self.current_round > 0:
+                # Check both sprite enemies and voxel enemies
+                elif len(self.enemies) == 0 and len(self.voxel_entities) == 0 and self.current_round > 0:
                     self.inter_round_timer = 10.0
 
             renpy.store.stein_current_round = self.current_round
