@@ -588,22 +588,9 @@ init -10 python:
                     
                     vec4 mapPixel = texture2D(u_map_texture, mapUV);
                     if (mapPixel.r > 0.5) {
-                        int id = int(mapPixel.g * 255.0 + 0.5);
-                        if (id == 20) {
-                            vec3 norm;
-                            float t = intersectPyramid(rayPos - vec3(mapPos), rayDir, norm);
-                            if (t > 0.0 && t >= rayDist - 0.01) {
-                                rayDist = t;
-                                wallID = id;
-                                hit = 1;
-                                hitNormal = norm;
-                                break;
-                            }
-                        } else {
-                            wallID = id;
-                            hit = 1;
-                            break;
-                        }
+                        wallID = int(mapPixel.g * 255.0 + 0.5);
+                        hit = 1;
+                        break;
                     }
                 }
             }
@@ -742,13 +729,6 @@ init -10 python:
                 else { 
                     texUV = vec2(fract(localHit.x), fract(localHit.y));
                 }
-            }
-            else if (wallID == 20) {
-                if (abs(hitNormal.x) > 0.5) {
-                    texUV = vec2(fract(hitPos.y), fract(hitPos.z * 2.0));
-                } else {
-                    texUV = vec2(fract(hitPos.x), fract(hitPos.z * 2.0));
-                }
             } else {
                 if (side == 0) { // X-Side
                     float wallX = hitPos.y; 
@@ -877,12 +857,8 @@ init -10 python:
                                 mapUV *= u_map_uv_scale;
                                 vec4 shadowMapPixel = texture2D(u_map_texture, mapUV);
                                 if (shadowMapPixel.r > 0.5) {
-                                    // Check id to avoid pyramid casting cube shadows
-                                    int sID = int(shadowMapPixel.g * 255.0 + 0.5);
-                                    if (sID != 20) {
-                                        hitWall = true;
-                                        break;
-                                    }
+                                    hitWall = true;
+                                    break;
                                 }
                             }
                             
@@ -905,9 +881,6 @@ init -10 python:
             float faceShadow = 1.0;
             if (hit == 3) {
                 if (abs(hitNormal.y) > 0.5) faceShadow = 0.7;
-            }
-            else if (wallID == 20) {
-                faceShadow = 0.6 + 0.4 * hitNormal.z;
             } else {
                 if (side == 1) faceShadow = 0.7; 
                 if (side == 2) faceShadow = 1.0; 
@@ -1198,11 +1171,8 @@ init -10 python:
                                             mapUV *= u_map_uv_scale;
                                             vec4 smp = texture2D(u_map_texture, mapUV);
                                             if (smp.r > 0.5) {
-                                                int sid = int(smp.g * 255.0 + 0.5);
-                                                if (sid != 20) {
-                                                    hitWall = true;
-                                                    break;
-                                                }
+                                                hitWall = true;
+                                                break;
                                             }
                                         }
                                         
@@ -2894,6 +2864,19 @@ init -10 python:
                 "pics/walls/bluestone.webp", "pics/walls/mossy.webp",
                 "pics/walls/wood.webp", "pics/walls/colorstone.webp",
                 "pics/walls/cement.webp",
+                "pics/walls/black.webp", # 10
+                "pics/walls/gray.webp", # 11
+                "pics/walls/red.webp", # 12
+                "pics/walls/orange.webp", # 13
+                "pics/walls/yellow.webp", # 14
+                "pics/walls/light_green.webp", # 15
+                "pics/walls/green.webp", # 16
+                "pics/walls/green_blue.webp", # 17
+                "pics/walls/light_blue.webp", # 18
+                "pics/walls/blue.webp", # 19
+                "pics/walls/purple.webp", # 20
+                "pics/walls/light_purple.webp", # 21
+                "pics/walls/pink.webp", # 22
             ]
             
             surfaces = []
@@ -3726,7 +3709,6 @@ init -10 python:
             if tile == 0: return False
             
             h = 1.0
-            if tile == 20: h = 0.5
             
             local_z = z - float(layer)
             if local_z >= h: return False
@@ -4083,11 +4065,11 @@ init -10 python:
                     elif ev.button == 3: # Right Click - Remove
                         self.handle_builder_action('remove')
                     elif ev.button == 4: # Wheel Up
-                        self.selected_voxel = (self.selected_voxel % 9) + 1
+                        self.selected_voxel = (self.selected_voxel % int(self.num_textures)) + 1
                         self.pickup_msg = f"VOXEL: {self.selected_voxel}"
                         self.pickup_msg_timer = 1.0
                     elif ev.button == 5: # Wheel Down
-                        self.selected_voxel = ((self.selected_voxel - 2) % 9) + 1
+                        self.selected_voxel = ((self.selected_voxel - 2) % int(self.num_textures)) + 1
                         self.pickup_msg = f"VOXEL: {self.selected_voxel}"
                         self.pickup_msg_timer = 1.0
                     

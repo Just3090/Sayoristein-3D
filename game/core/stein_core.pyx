@@ -278,7 +278,7 @@ cdef public double get_map_height_c(
         tile = flat_map[idx]
         
         if tile > 0:
-            block_height = 0.5 if tile == 20 else 1.0
+            block_height = 1.0
             
             top_z = (min_layer + l) + block_height
             
@@ -326,7 +326,7 @@ cdef inline double _get_height_fast(int x, int y, int check_z, int w, int h, int
         idx = (l * w * h) + (x * h) + y
         tile = flat_map[idx]
         if tile > 0:
-            block_height = 0.5 if tile == 20 else 1.0
+            block_height = 1.0
             top_z = (min_layer + l) + block_height
             if top_z <= (check_z + 1.0): 
                 if top_z > max_z: max_z = top_z
