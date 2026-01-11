@@ -2889,11 +2889,11 @@ init -10 python:
 
         def create_wall_atlas(self):
             image_paths = [  
-                "pics/walls/eagle.png", "pics/walls/redbrick.png",
-                "pics/walls/purplestone.png", "pics/walls/greystone.png",
-                "pics/walls/bluestone.png", "pics/walls/mossy.png",
-                "pics/walls/wood.png", "pics/walls/colorstone.png",
-                "pics/walls/cement.png",
+                "pics/walls/eagle.webp", "pics/walls/redbrick.webp",
+                "pics/walls/purplestone.webp", "pics/walls/greystone.webp",
+                "pics/walls/bluestone.webp", "pics/walls/mossy.webp",
+                "pics/walls/wood.webp", "pics/walls/colorstone.webp",
+                "pics/walls/cement.webp",
             ]
             
             surfaces = []
@@ -2927,7 +2927,7 @@ init -10 python:
 
         def load_floor_texture(self):
             try:
-                with renpy.open_file("pics/walls/cement.png") as f:
+                with renpy.open_file("pics/walls/cement.webp") as f:
                     surf = pygame.image.load(f).convert_alpha()
                     surf = pygame.transform.scale(surf, (64, 64))
                     return renpy.display.draw.load_texture(surf)
@@ -4022,7 +4022,7 @@ init -10 python:
                 
                 # Pitch (vertical look)
                 self.player.pitch -= ev.rel[1] * pitch_sensitivity
-                self.player.pitch = max(-1000.0, min(1000.0, self.player.pitch))
+                self.player.pitch = max(-50000.0, min(50000.0, self.player.pitch))
 
             if ev.type == pygame.KEYDOWN:
                 if config.developer:
@@ -4151,7 +4151,7 @@ init -10 python:
                             p_speed = 19.0 * persistent.stein_gamepad_sens_y
                             if self.is_aiming or self.gp_aiming: p_speed *= 0.5
                             self.player.pitch -= ry * p_speed
-                            self.player.pitch = max(-1000.0, min(1000.0, self.player.pitch))
+                            self.player.pitch = max(-50000.0, min(50000.0, self.player.pitch))
 
                     if joy.get_numaxes() > 5 and joy.get_axis(5) > TRIGGER_THRESHOLD: self.gp_firing = True
                     if joy.get_numbuttons() > 5 and joy.get_button(5): self.gp_firing = True
