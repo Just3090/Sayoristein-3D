@@ -1062,17 +1062,30 @@ screen animation_editor():
                             mousewheel True
                             vbox:
                                 for gname in sorted(renderer.voxel_groups.keys()):
-                                    hbox:
-                                        xfill True
-                                        textbutton gname:
-                                            text_size 14 text_color "#CCC"
-                                            action Function(renderer.select_group, gname)
-                                            xsize 180
+                                    $ g_data = renderer.voxel_groups[gname]
+                                    $ is_list = isinstance(g_data, list)
+                                    $ g_pivot = (-1,-1,-1) if is_list else g_data.get("pivot", (-1,-1,-1))
+                                    
+                                    vbox:
+                                        hbox:
+                                            xfill True
+                                            textbutton gname:
+                                                text_size 14 text_color ("#0FF" if tuple(g_pivot) == renderer.current_pivot and renderer.current_pivot[0] >= 0 else "#CCC")
+                                                action Function(renderer.select_group, gname)
+                                                xsize 180
+                                            
+                                            textbutton "Del":
+                                                action Function(renderer.delete_group, gname)
+                                                text_size 12 text_color "#F66"
                                         
-                                        textbutton "Del":
-                                            action Function(renderer.delete_group, gname)
-                                            text_size 12 text_color "#F66"
-                    
+                                        hbox:
+                                            spacing 10
+                                            text "Pivot: [g_pivot[0]:.0f], [g_pivot[1]:.0f], [g_pivot[2]:.0f]" size 10 color "#6AF"
+                                            textbutton "Set":
+                                                action Function(renderer.set_group_pivot, gname)
+                                                text_size 10 text_color "#FFF"
+                                                background Solid("#468")
+                                                padding (4, 2)                    
                     hbox:
                         spacing 10
                         if editing_field == "group_name":

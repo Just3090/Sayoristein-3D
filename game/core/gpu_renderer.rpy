@@ -372,6 +372,7 @@ init -10 python:
         uniform float u_max_dist;
         uniform float u_simple_floor;
         uniform vec3 u_highlight_pos;
+        uniform vec3 u_pivot_pos;
         uniform vec3 u_ambient_color;
         uniform vec3 u_ambient_near_color;
         varying vec2 v_tex_coord;
@@ -905,6 +906,11 @@ init -10 python:
 
             if (is_selected) {
                 color = mix(color, vec3(1.0, 0.5, 0.0), 0.4);
+            }
+
+            // Pivot Highlight (Cyan)
+            if (vec3(mapPos) == u_pivot_pos) {
+                color = mix(color, vec3(0.0, 1.0, 1.0), 0.6);
             }
 
         } else {
@@ -2482,6 +2488,7 @@ init -10 python:
             renderer.add_uniform('u_ambient_color', current_ambient)
             renderer.add_uniform('u_ambient_near_color', current_ambient_near)
             renderer.add_uniform('u_highlight_pos', getattr(c, 'highlight_pos', (-1.0, -1.0, -1.0)))
+            renderer.add_uniform('u_pivot_pos', getattr(c, 'current_pivot', (-1.0, -1.0, -1.0)))
 
             renderer.add_uniform('u_map_size', (float(c.map_w), float(c.map_h)))
             renderer.add_uniform('u_map_uv_scale', c.map_uv_scale)
@@ -2950,6 +2957,7 @@ init -10 python:
             self.editor_mode = editor_mode 
             self.editor_target = None # For Editor Inverse Camera logic
             self.highlight_pos = (-1.0, -1.0, -1.0) # Voxel selection coordinates
+            self.current_pivot = (-1.0, -1.0, -1.0) # Pivot point for current selection
             self.selection_map = {} # Map of (x,y,z) is bool
             self.voxel_groups = {} # Map of "GroupName" -> [(x,y,z), ...]
             self.selection_texture = None
@@ -3770,19 +3778,41 @@ init -10 python:
             self.selection_texture = renpy.display.draw.load_texture(surf)
 
         def assign_to_group(self, name):
-            """Assigns currently selected voxels to a group."""
+            """Assigns currently selected voxels to a group with its pivot."""
             if not name: return
-            self.voxel_groups[name] = list(self.selection_map.keys())
-            renpy.notify(f"Assigned {len(self.voxel_groups[name])} voxels to '{name}'")
+            self.voxel_groups[name] = {
+                "voxels": [list(pos) for pos in self.selection_map.keys()],
+                "pivot": list(self.current_pivot)
+            }
+            renpy.notify(f"Assigned {len(self.voxel_groups[name]['voxels'])} voxels to '{name}'")
 
         def select_group(self, name):
-            """Selects all voxels belonging to a group."""
+            """Selects all voxels and pivot belonging to a group."""
             if name not in self.voxel_groups: return
+            group = self.voxel_groups[name]
+            
             self.selection_map.clear()
-            for pos in self.voxel_groups[name]:
-                # Convert list [x,y,z] from json to tuple (x,y,z) for dict key
+            # Handle legacy list storage vs new dict storage
+            voxels = group if isinstance(group, list) else group.get("voxels", [])
+            pivot = (-1.0, -1.0, -1.0) if isinstance(group, list) else group.get("pivot", (-1.0, -1.0, -1.0))
+            
+            for pos in voxels:
                 self.selection_map[tuple(pos)] = True
+            
+            self.current_pivot = tuple(pivot)
             self.selection_texture = None # Force update
+            renpy.restart_interaction()
+
+        def set_group_pivot(self, name):
+            """Sets current highlight_pos as pivot for the specified group."""
+            if name not in self.voxel_groups: return
+            if self.highlight_pos[0] < 0:
+                renpy.notify("Select a voxel first to set as pivot")
+                return
+            
+            self.voxel_groups[name]["pivot"] = list(self.highlight_pos)
+            self.current_pivot = tuple(self.highlight_pos)
+            renpy.notify(f"Pivot set for '{name}'")
             renpy.restart_interaction()
 
         def delete_group(self, name):
