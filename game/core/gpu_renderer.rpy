@@ -2951,6 +2951,7 @@ init -10 python:
             self.editor_target = None # For Editor Inverse Camera logic
             self.highlight_pos = (-1.0, -1.0, -1.0) # Voxel selection coordinates
             self.selection_map = {} # Map of (x,y,z) is bool
+            self.voxel_groups = {} # Map of "GroupName" -> [(x,y,z), ...]
             self.selection_texture = None
             self.objects_def = objects # List of (x, y, z, filename) 
             
@@ -3767,6 +3768,28 @@ init -10 python:
                         surf.set_at((int(mx), int(base_y + my)), (255, 0, 0, 255))
             
             self.selection_texture = renpy.display.draw.load_texture(surf)
+
+        def assign_to_group(self, name):
+            """Assigns currently selected voxels to a group."""
+            if not name: return
+            self.voxel_groups[name] = list(self.selection_map.keys())
+            renpy.notify(f"Assigned {len(self.voxel_groups[name])} voxels to '{name}'")
+
+        def select_group(self, name):
+            """Selects all voxels belonging to a group."""
+            if name not in self.voxel_groups: return
+            self.selection_map.clear()
+            for pos in self.voxel_groups[name]:
+                # Convert list [x,y,z] from json to tuple (x,y,z) for dict key
+                self.selection_map[tuple(pos)] = True
+            self.selection_texture = None # Force update
+            renpy.restart_interaction()
+
+        def delete_group(self, name):
+            """Deletes a voxel group."""
+            if name in self.voxel_groups:
+                del self.voxel_groups[name]
+                renpy.restart_interaction()
 
         def render(self, width, height, st, at):
             if self.oldst is None: self.oldst = st
