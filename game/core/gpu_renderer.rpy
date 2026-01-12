@@ -2958,6 +2958,7 @@ init -10 python:
             self.editor_target = None # For Editor Inverse Camera logic
             self.highlight_pos = (-1.0, -1.0, -1.0) # Voxel selection coordinates
             self.current_pivot = (-1.0, -1.0, -1.0) # Pivot point for current selection
+            self.selected_group = "None" # Currently active vertex group
             self.selection_map = {} # Map of (x,y,z) is bool
             self.voxel_groups = {} # Map of "GroupName" -> [(x,y,z), ...]
             self.selection_texture = None
@@ -3780,16 +3781,34 @@ init -10 python:
         def assign_to_group(self, name):
             """Assigns currently selected voxels to a group with its pivot."""
             if not name: return
+            
+            # Preserve existing parent if group exists
+            old_parent = None
+            if name in self.voxel_groups:
+                old_parent = self.voxel_groups[name].get("parent")
+
             self.voxel_groups[name] = {
                 "voxels": [list(pos) for pos in self.selection_map.keys()],
-                "pivot": list(self.current_pivot)
+                "pivot": list(self.current_pivot),
+                "parent": old_parent
             }
             renpy.notify(f"Assigned {len(self.voxel_groups[name]['voxels'])} voxels to '{name}'")
+
+        def set_group_parent(self, name, parent_name):
+            """Sets the parent for a group."""
+            if name not in self.voxel_groups: return
+            if parent_name == "None": parent_name = None
+            if name == parent_name: return # Prevent self-parenting
+            
+            self.voxel_groups[name]["parent"] = parent_name
+            renpy.notify(f"Set parent of '{name}' to '{parent_name}'")
+            renpy.restart_interaction()
 
         def select_group(self, name):
             """Selects all voxels and pivot belonging to a group."""
             if name not in self.voxel_groups: return
             group = self.voxel_groups[name]
+            self.selected_group = name
             
             self.selection_map.clear()
             # Handle legacy list storage vs new dict storage
