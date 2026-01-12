@@ -271,6 +271,12 @@ init python:
             self.x = 0.0
             self.y = 0.0
             self.z = 0.0
+            self.rx = 0.0
+            self.ry = 0.0
+            self.rz = 0.0
+            self.sx = 1.0
+            self.sy = 1.0
+            self.sz = 1.0
 
     def load_object_into_editor(renderer_obj, filename):
         """
@@ -768,6 +774,7 @@ screen animation_editor():
     # Timeline State
     default current_time = 0.0
     default is_playing = False
+    default last_preview_time = -1.0
     
     # Object Explorer State
     default explorer_tab = "anims" # "anims" or "objects"
@@ -784,6 +791,13 @@ screen animation_editor():
         lighting_preset=stein_current_lighting,
         editor_mode=True
     )
+
+    python:
+        # Realtime update: only force object state if playing or time moved, and not currently editing
+        if renderer.editor_target and editing_field is None:
+            if is_playing or current_time != last_preview_time:
+                apply_animation_frame(current_anim_data, renderer.editor_target, current_time)
+                last_preview_time = current_time
     
     # Background
     button:
@@ -859,25 +873,32 @@ screen animation_editor():
                             value ScreenVariableValue("current_time", range=current_anim_data['meta']['duration'])
                             xfill True
                             ysize 30
-                            
-                            # Live Preview: update object as we scrub
-                            changed Function(apply_animation_frame, current_anim_data, renderer.editor_target, current_time)
                         
-                        # Keyframe markers (visual guide)
-                        # We draw simple rectangles where keyframes exist
+                        # Keyframe markers
                         if current_anim_data.get("tracks"):
                             fixed:
-                                ysize 10
+                                ysize 12
                                 xfill True
-                                for track_name, keys in current_anim_data["tracks"].items():
-                                    for k in keys:
-                                        # Calculate position percentage
-                                        $ k_pos = (k["time"] / max(0.1, current_anim_data['meta']['duration']))
-                                        if k_pos <= 1.0:
-                                            frame:
-                                                background Solid("#FFFF00")
-                                                xsize 4 ysize 8
-                                                align (k_pos, 0.5)
+                                
+                                # Use a set to get unique time markers
+                                python:
+                                    all_times = set()
+                                    for track in current_anim_data["tracks"].values():
+                                        for k in track:
+                                            all_times.add(k["time"])
+                                    sorted_times = sorted(list(all_times))
+
+                                for kt in sorted_times:
+                                    $ k_pos = (kt / max(0.1, current_anim_data['meta']['duration']))
+                                    if k_pos <= 1.0:
+                                        imagebutton:
+                                            idle Solid("#FFFF00")
+                                            hover Solid("#FFFFFF")
+                                            xsize 6 ysize 10
+                                            align (k_pos, 0.5)
+                                            # Click to jump to keyframe
+                                            action SetScreenVariable("current_time", kt)
+                                            tooltip "Jump to [kt:.2f]s"
                     
                     # Separator
                     add Solid("#444") xsize 2 ysize 180
@@ -975,14 +996,118 @@ screen animation_editor():
                 text "Selected Object:" size 18 color "#AAA"
                 text "[current_object_name]" size 16 color "#FFF"
                 
-                null height 20
+                null height 5
+                
+                # Voxel Selection Info
+                text "Voxel Selection" size 18 color "#AAA"
+                hbox:
+                    spacing 10
+                    text "Count:" size 14 color "#AAA"
+                    $ sel_count = len(renderer.selection_map)
+                    text "[sel_count]" size 14 color "#0F0"
+                    
+                    null width 10
+                    textbutton "Clear":
+                        action [
+                            Function(renderer.selection_map.clear),
+                            SetField(renderer, "selection_texture", None),
+                            SetField(renderer, "highlight_pos", (-1.0, -1.0, -1.0)),
+                            Notify("Selection cleared")
+                        ]
+                        text_size 14 text_color "#F88"
+                
+                hbox:
+                    spacing 10
+                    text "Last:" size 14 color "#AAA"
+                    if renderer.highlight_pos[0] >= 0:
+                        text "[renderer.highlight_pos[0]:.0f], [renderer.highlight_pos[1]:.0f], [renderer.highlight_pos[2]:.0f]" size 14 color "#FF0"
+                    else:
+                        text "None" size 14 color "#666"
+                
+                null height 10
                 
                 if renderer.editor_target:
+                    text "Transform (Offset)" size 18 color "#AAA"
+                    hbox:
+                        spacing 5
+                        vbox:
+                            xsize 80
+                            text "Position" size 14 color "#666"
+                            hbox:
+                                text "X: " color "#AAA" yalign 0.5 size 14
+                                if editing_field == "x":
+                                    input value FloatInputValue(renderer.editor_target, 'x') length 6 color "#FFF" pixel_width 50 action SetScreenVariable("editing_field", None)
+                                else:
+                                    textbutton "[renderer.editor_target.x:.2f]" action SetScreenVariable("editing_field", "x") text_color "#FFF" text_size 14
+                            hbox:
+                                text "Y: " color "#AAA" yalign 0.5 size 14
+                                if editing_field == "y":
+                                    input value FloatInputValue(renderer.editor_target, 'y') length 6 color "#FFF" pixel_width 50 action SetScreenVariable("editing_field", None)
+                                else:
+                                    textbutton "[renderer.editor_target.y:.2f]" action SetScreenVariable("editing_field", "y") text_color "#FFF" text_size 14
+                            hbox:
+                                text "Z: " color "#AAA" yalign 0.5 size 14
+                                if editing_field == "z":
+                                    input value FloatInputValue(renderer.editor_target, 'z') length 6 color "#FFF" pixel_width 50 action SetScreenVariable("editing_field", None)
+                                else:
+                                    textbutton "[renderer.editor_target.z:.2f]" action SetScreenVariable("editing_field", "z") text_color "#FFF" text_size 14
+
+                        vbox:
+                            xsize 80
+                            text "Rotation" size 14 color "#666"
+                            hbox:
+                                text "RX:" color "#AAA" yalign 0.5 size 14
+                                if editing_field == "rx":
+                                    input value FloatInputValue(renderer.editor_target, 'rx') length 6 color "#FFF" pixel_width 50 action SetScreenVariable("editing_field", None)
+                                else:
+                                    textbutton "[renderer.editor_target.rx:.1f]" action SetScreenVariable("editing_field", "rx") text_color "#FFF" text_size 14
+                            hbox:
+                                text "RY:" color "#AAA" yalign 0.5 size 14
+                                if editing_field == "ry":
+                                    input value FloatInputValue(renderer.editor_target, 'ry') length 6 color "#FFF" pixel_width 50 action SetScreenVariable("editing_field", None)
+                                else:
+                                    textbutton "[renderer.editor_target.ry:.1f]" action SetScreenVariable("editing_field", "ry") text_color "#FFF" text_size 14
+                            hbox:
+                                text "RZ:" color "#AAA" yalign 0.5 size 14
+                                if editing_field == "rz":
+                                    input value FloatInputValue(renderer.editor_target, 'rz') length 6 color "#FFF" pixel_width 50 action SetScreenVariable("editing_field", None)
+                                else:
+                                    textbutton "[renderer.editor_target.rz:.1f]" action SetScreenVariable("editing_field", "rz") text_color "#FFF" text_size 14
+
+                        vbox:
+                            xsize 80
+                            text "Scale" size 14 color "#666"
+                            hbox:
+                                text "SX:" color "#AAA" yalign 0.5 size 14
+                                if editing_field == "sx":
+                                    input value FloatInputValue(renderer.editor_target, 'sx') length 6 color "#FFF" pixel_width 50 action SetScreenVariable("editing_field", None)
+                                else:
+                                    textbutton "[renderer.editor_target.sx:.2f]" action SetScreenVariable("editing_field", "sx") text_color "#FFF" text_size 14
+                            hbox:
+                                text "SY:" color "#AAA" yalign 0.5 size 14
+                                if editing_field == "sy":
+                                    input value FloatInputValue(renderer.editor_target, 'sy') length 6 color "#FFF" pixel_width 50 action SetScreenVariable("editing_field", None)
+                                else:
+                                    textbutton "[renderer.editor_target.sy:.2f]" action SetScreenVariable("editing_field", "sy") text_color "#FFF" text_size 14
+                            hbox:
+                                text "SZ:" color "#AAA" yalign 0.5 size 14
+                                if editing_field == "sz":
+                                    input value FloatInputValue(renderer.editor_target, 'sz') length 6 color "#FFF" pixel_width 50 action SetScreenVariable("editing_field", None)
+                                else:
+                                    textbutton "[renderer.editor_target.sz:.2f]" action SetScreenVariable("editing_field", "sz") text_color "#FFF" text_size 14
+
+                    null height 10
                     textbutton "Add Keyframe":
                         action [
                             Function(add_keyframe, current_anim_data, "x", current_time, renderer.editor_target.x),
                             Function(add_keyframe, current_anim_data, "y", current_time, renderer.editor_target.y),
                             Function(add_keyframe, current_anim_data, "z", current_time, renderer.editor_target.z),
+                            Function(add_keyframe, current_anim_data, "rx", current_time, renderer.editor_target.rx),
+                            Function(add_keyframe, current_anim_data, "ry", current_time, renderer.editor_target.ry),
+                            Function(add_keyframe, current_anim_data, "rz", current_time, renderer.editor_target.rz),
+                            Function(add_keyframe, current_anim_data, "sx", current_time, renderer.editor_target.sx),
+                            Function(add_keyframe, current_anim_data, "sy", current_time, renderer.editor_target.sy),
+                            Function(add_keyframe, current_anim_data, "sz", current_time, renderer.editor_target.sz),
                             Notify("Keyframe added at [current_time]s")
                         ]
                         xfill True
@@ -992,34 +1117,16 @@ screen animation_editor():
                             Function(remove_keyframe, current_anim_data, "x", current_time),
                             Function(remove_keyframe, current_anim_data, "y", current_time),
                             Function(remove_keyframe, current_anim_data, "z", current_time),
+                            Function(remove_keyframe, current_anim_data, "rx", current_time),
+                            Function(remove_keyframe, current_anim_data, "ry", current_time),
+                            Function(remove_keyframe, current_anim_data, "rz", current_time),
+                            Function(remove_keyframe, current_anim_data, "sx", current_time),
+                            Function(remove_keyframe, current_anim_data, "sy", current_time),
+                            Function(remove_keyframe, current_anim_data, "sz", current_time),
                             Notify("Keyframe removed at [current_time]s")
                         ]
                         xfill True
-                
-                null height 20
-                
-                if renderer.editor_target:
-                    text "Transform (Offset)" size 18 color "#AAA"
-                    hbox:
-                        text "X: " color "#AAA" yalign 0.5
-                        if editing_field == "x":
-                            input value FloatInputValue(renderer.editor_target, 'x') length 10 color "#FFF" pixel_width 150 action SetScreenVariable("editing_field", None)
-                        else:
-                            textbutton "[renderer.editor_target.x:.2f]" action SetScreenVariable("editing_field", "x") text_color "#FFF"
-                    hbox:
-                        text "Y: " color "#AAA" yalign 0.5
-                        if editing_field == "y":
-                            input value FloatInputValue(renderer.editor_target, 'y') length 10 color "#FFF" pixel_width 150 action SetScreenVariable("editing_field", None)
-                        else:
-                            textbutton "[renderer.editor_target.y:.2f]" action SetScreenVariable("editing_field", "y") text_color "#FFF"
-                    hbox:
-                        text "Z: " color "#AAA" yalign 0.5
-                        if editing_field == "z":
-                            input value FloatInputValue(renderer.editor_target, 'z') length 10 color "#FFF" pixel_width 150 action SetScreenVariable("editing_field", None)
-                        else:
-                            textbutton "[renderer.editor_target.z:.2f]" action SetScreenVariable("editing_field", "z") text_color "#FFF"
-                else:
-                    text "No Object Loaded" color "#666"
+
 
     textbutton "Exit Editor" action Return() align (1.0, 0.0) offset (-10, -10)
 

@@ -344,6 +344,7 @@ init -10 python:
         uniform float u_vertical_scale;
         uniform sampler2D u_sky_texture;
         uniform sampler2D u_map_texture;
+        uniform sampler2D u_selection_texture;
         uniform vec2 u_map_size;
         uniform vec2 u_map_uv_scale; 
         uniform float u_map_layer_norm_height;
@@ -370,6 +371,7 @@ init -10 python:
         uniform float u_enable_shadows;
         uniform float u_max_dist;
         uniform float u_simple_floor;
+        uniform vec3 u_highlight_pos;
         uniform vec3 u_ambient_color;
         uniform vec3 u_ambient_near_color;
         varying vec2 v_tex_coord;
@@ -888,6 +890,22 @@ init -10 python:
             }
             
             color = finalColor * totalLight * faceShadow;
+
+            // Highlight Voxel (Editor Selection)
+            // Single highlight pos (cursor)
+            bool is_selected = (vec3(mapPos) == u_highlight_pos);
+            
+            // Multi-selection map
+            vec2 cellUV_sel = (vec2(float(mapPos.x), float(mapPos.y)) + 0.5) * u_map_tex_pixel_size;
+            int layer_idx_sel = mapPos.z - int(u_map_layer_base_y);
+            vec2 mapUV_sel = vec2(cellUV_sel.x, cellUV_sel.y + float(layer_idx_sel) * u_map_layer_norm_height);
+            if (texture2D(u_selection_texture, mapUV_sel).r > 0.5) {
+                is_selected = true;
+            }
+
+            if (is_selected) {
+                color = mix(color, vec3(1.0, 0.5, 0.0), 0.4);
+            }
 
         } else {
             if (u_volumetric_clouds > 0.5) {
@@ -2372,16 +2390,40 @@ init -10 python:
             cam_x = c.player.x
             cam_y = c.player.y
             cam_z = c.player.z
+            cam_rot = c.player.rot
             
             if hasattr(c, 'editor_target') and c.editor_target:
+                # Apply Position Offsets
                 cam_x -= c.editor_target.x
                 cam_y -= c.editor_target.y
                 cam_z -= c.editor_target.z
+                
+                # Apply Rotation Orbit (Inverse RZ)
+                # Since the object is the map, we orbit the camera around map center
+                center_x = c.mapWidth / 2.0
+                center_y = c.mapHeight / 2.0
+                
+                # Use RZ for horizontal rotation (Yaw)
+                rz_rad = math.radians(c.editor_target.rz)
+                
+                # Rotate player position relative to center
+                rel_x = cam_x - center_x
+                rel_y = cam_y - center_y
+                
+                # 2D Rotation matrix
+                s_rot = math.sin(-rz_rad)
+                c_rot = math.cos(-rz_rad)
+                
+                cam_x = center_x + (rel_x * c_rot - rel_y * s_rot)
+                cam_y = center_y + (rel_x * s_rot + rel_y * c_rot)
+                
+                # Offset player rotation
+                cam_rot -= rz_rad
 
             renderer.add_uniform('u_resolution', (float(width), float(height)))
             renderer.add_uniform('u_time', st)
             renderer.add_uniform('u_player_pos', (cam_x, cam_y))
-            renderer.add_uniform('u_player_dir', (c.player.dirx, c.player.diry))
+            renderer.add_uniform('u_player_dir', (math.cos(cam_rot), math.sin(cam_rot)))
             renderer.add_uniform('u_player_plane', (plane_x, plane_y))
             renderer.add_uniform('u_pitch', (c.player.pitch / float(height)) + bob_offset)
             renderer.add_uniform('u_z_offset', cam_z)
@@ -2439,10 +2481,17 @@ init -10 python:
 
             renderer.add_uniform('u_ambient_color', current_ambient)
             renderer.add_uniform('u_ambient_near_color', current_ambient_near)
+            renderer.add_uniform('u_highlight_pos', getattr(c, 'highlight_pos', (-1.0, -1.0, -1.0)))
 
             renderer.add_uniform('u_map_size', (float(c.map_w), float(c.map_h)))
             renderer.add_uniform('u_map_uv_scale', c.map_uv_scale)
             renderer.add_uniform('u_map_texture', c.map_texture)
+            
+            # Selection Map
+            if getattr(c, 'selection_texture', None) is None:
+                c.update_selection_texture()
+            renderer.add_uniform('u_selection_texture', c.selection_texture)
+
             renderer.add_uniform('u_map_layer_norm_height', c.map_layer_norm_height)
             renderer.add_uniform('u_map_layer_base_y', float(c.min_layer))
             renderer.add_uniform('u_map_layer_count', float(c.num_layers))
@@ -2534,6 +2583,14 @@ init -10 python:
         target_obj.x = get_anim_value_at_time(anim_data, "x", time, target_obj.x)
         target_obj.y = get_anim_value_at_time(anim_data, "y", time, target_obj.y)
         target_obj.z = get_anim_value_at_time(anim_data, "z", time, target_obj.z)
+        
+        target_obj.rx = get_anim_value_at_time(anim_data, "rx", time, getattr(target_obj, 'rx', 0.0))
+        target_obj.ry = get_anim_value_at_time(anim_data, "ry", time, getattr(target_obj, 'ry', 0.0))
+        target_obj.rz = get_anim_value_at_time(anim_data, "rz", time, getattr(target_obj, 'rz', 0.0))
+        
+        target_obj.sx = get_anim_value_at_time(anim_data, "sx", time, getattr(target_obj, 'sx', 1.0))
+        target_obj.sy = get_anim_value_at_time(anim_data, "sy", time, getattr(target_obj, 'sy', 1.0))
+        target_obj.sz = get_anim_value_at_time(anim_data, "sz", time, getattr(target_obj, 'sz', 1.0))
 
     class AnimationController(object):
         def __init__(self, owner):
@@ -2544,9 +2601,12 @@ init -10 python:
             self.is_playing = False
             self.loop = False
             self.duration = 0.0
-            self.ox = 0.0
-            self.oy = 0.0
-            self.oz = 0.0
+            # Position Offsets
+            self.ox = 0.0; self.oy = 0.0; self.oz = 0.0
+            # Rotation Offsets (Degrees)
+            self.orx = 0.0; self.ory = 0.0; self.orz = 0.0
+            # Scale Offsets
+            self.osx = 1.0; self.osy = 1.0; self.osz = 1.0
 
         def play(self, anim_name, loop=True):
             if hasattr(renpy.store, 'load_anim_json'):
@@ -2558,18 +2618,23 @@ init -10 python:
                     self.duration = float(data['meta'].get('duration', 1.0))
                     self.loop = loop 
                     self.is_playing = True
-                    self.ox = 0.0; self.oy = 0.0; self.oz = 0.0
+                    self.reset_offsets()
                 else:
                     print(f"Animation {anim_name} not found.")
+
+        def reset_offsets(self):
+            self.ox = 0.0; self.oy = 0.0; self.oz = 0.0
+            self.orx = 0.0; self.ory = 0.0; self.orz = 0.0
+            self.osx = 1.0; self.osy = 1.0; self.osz = 1.0
 
         def stop(self):
             self.is_playing = False
             self.anim_name = None
-            self.ox = 0.0; self.oy = 0.0; self.oz = 0.0
+            self.reset_offsets()
 
         def update(self, dt):
             if not self.is_playing or not self.anim_data:
-                self.ox = 0.0; self.oy = 0.0; self.oz = 0.0
+                self.reset_offsets()
                 return
 
             self.current_time += dt
@@ -2581,10 +2646,18 @@ init -10 python:
                     self.current_time = self.duration
                     self.is_playing = False
             
-            # Apply offsets (relative to 0.0)
+            # Apply all tracks
             self.ox = get_anim_value_at_time(self.anim_data, "x", self.current_time, 0.0)
             self.oy = get_anim_value_at_time(self.anim_data, "y", self.current_time, 0.0)
             self.oz = get_anim_value_at_time(self.anim_data, "z", self.current_time, 0.0)
+            
+            self.orx = get_anim_value_at_time(self.anim_data, "rx", self.current_time, 0.0)
+            self.ory = get_anim_value_at_time(self.anim_data, "ry", self.current_time, 0.0)
+            self.orz = get_anim_value_at_time(self.anim_data, "rz", self.current_time, 0.0)
+            
+            self.osx = get_anim_value_at_time(self.anim_data, "sx", self.current_time, 1.0)
+            self.osy = get_anim_value_at_time(self.anim_data, "sy", self.current_time, 1.0)
+            self.osz = get_anim_value_at_time(self.anim_data, "sz", self.current_time, 1.0)
 
     class SceneObject(object):
         def __init__(self, x, y, z, filename, model_parts=[]):
@@ -2769,6 +2842,15 @@ init -10 python:
             self.visual.x = self.x + self.anim_controller.ox
             self.visual.y = self.y + self.anim_controller.oy
             self.visual.z = self.z + self.anim_controller.oz
+            
+            # Sync Rotation and Scale (for future shader support)
+            self.visual.rot_x = self.anim_controller.orx
+            self.visual.rot_y = self.anim_controller.ory
+            self.visual.rot_z = self.anim_controller.orz
+            
+            self.visual.scale_x = self.anim_controller.osx
+            self.visual.scale_y = self.anim_controller.osy
+            self.visual.scale_z = self.anim_controller.osz
 
     class VoxelSniper(VoxelEntity):
         def __init__(self, wm, x, y, z, filename=MODEL_VOXEL_SNIPER, health=80):
@@ -2867,6 +2949,9 @@ init -10 python:
             self.worldMap = worldMap
             self.editor_mode = editor_mode 
             self.editor_target = None # For Editor Inverse Camera logic
+            self.highlight_pos = (-1.0, -1.0, -1.0) # Voxel selection coordinates
+            self.selection_map = {} # Map of (x,y,z) is bool
+            self.selection_texture = None
             self.objects_def = objects # List of (x, y, z, filename) 
             
             if isinstance(worldMap, dict) or hasattr(worldMap, 'items'):
@@ -3660,6 +3745,29 @@ init -10 python:
             
             return tex
 
+        def update_selection_texture(self):
+            """Updates the selection texture based on the selection_map."""
+            def next_power_of_two(n):
+                if n == 0: return 1
+                return 2**math.ceil(math.log(n, 2))
+            
+            layer_h_pixels = next_power_of_two(self.map_h)
+            w_pot = max(64, next_power_of_two(self.map_w))
+            h_pot = max(64, next_power_of_two(layer_h_pixels * self.num_layers))
+
+            surf = pygame.Surface((w_pot, h_pot), flags=pygame.SRCALPHA, depth=32)
+            surf.fill((0,0,0,0))
+            
+            for pos in self.selection_map.keys():
+                mx, my, mz = pos
+                layer_idx = int(mz) - self.min_layer
+                if 0 <= layer_idx < self.num_layers:
+                    base_y = int(layer_idx * layer_h_pixels)
+                    if 0 <= mx < w_pot and 0 <= (base_y + my) < h_pot:
+                        surf.set_at((int(mx), int(base_y + my)), (255, 0, 0, 255))
+            
+            self.selection_texture = renpy.display.draw.load_texture(surf)
+
         def render(self, width, height, st, at):
             if self.oldst is None: self.oldst = st
             dtime = st - self.oldst
@@ -3782,11 +3890,11 @@ init -10 python:
                     r.blit(heal_r, (0,0))
 
             # Crosshair
+            sight_r = renpy.render(self.sight_d, width, height, st, at)
+            sw, sh = sight_r.get_size()
+            r.blit(sight_r, (width/2 - sw/2, height/2 - sh/2))
+            
             if not self.editor_mode:
-                sight_r = renpy.render(self.sight_d, width, height, st, at)
-                sw, sh = sight_r.get_size()
-                r.blit(sight_r, (width/2 - sw/2, height/2 - sh/2))
-                
                 # Hit Marker
                 if self.hit_marker_timer > 0:
                     hm_w, hm_h = self.hit_marker_img.get_size()
@@ -4616,7 +4724,50 @@ init -10 python:
                 if ev.key == pygame.K_2: self.switch_to_slot(SLOT_HANDGUN)
                 if ev.key == pygame.K_3: self.switch_to_slot(SLOT_LONG)
                 if ev.key == pygame.K_4: self.switch_to_slot(SLOT_SPECIAL)
-                if ev.key == pygame.K_f: self.flashlight_on = not self.flashlight_on
+                if ev.key == pygame.K_f:
+                    self.flashlight_on = not self.flashlight_on
+
+                if self.editor_mode and ev.key == pygame.K_y:
+                    # Raycast from camera center to find voxel
+                    px, py, pz = self.player.x, self.player.y, self.player.z
+                    rot, pitch = self.player.rot, self.player.pitch / float(self.height)
+                    
+                    if self.editor_target:
+                        px -= self.editor_target.x; py -= self.editor_target.y; pz -= self.editor_target.z
+                        cx, cy = self.mapWidth / 2.0, self.mapHeight / 2.0
+                        rz_rad = math.radians(self.editor_target.rz)
+                        rx, ry = px - cx, py - cy
+                        s, c_val = math.sin(-rz_rad), math.cos(-rz_rad)
+                        px, py = cx + (rx * c_val - ry * s), cy + (rx * s + ry * c_val)
+                        rot -= rz_rad
+
+                    map_addr, _ = self.flat_map_buffer.buffer_info()
+                    hit, mx, my, mz, side, sx, sy, sz = SteinWrapper.cast_ray_fast(
+                        px, py, 1.6 + pz, math.cos(rot), math.sin(rot), pitch,
+                        map_addr, self.mapWidth, self.mapHeight, self.num_layers, self.min_layer, 100.0
+                    )
+                    if hit:
+                        self.highlight_pos = (float(mx), float(my), float(mz))
+                        
+                        # Multi-selection toggle
+                        pos = (int(mx), int(my), int(mz))
+                        if pos in self.selection_map:
+                            del self.selection_map[pos]
+                            self.highlight_pos = (-1.0, -1.0, -1.0) # Clear visual highlight on deselect
+                            self.pickup_msg = f"VOXEL DESELECTED: {mx}, {my}, {mz}"
+                        else:
+                            self.selection_map[pos] = True
+                            self.highlight_pos = (float(mx), float(my), float(mz))
+                            self.pickup_msg = f"VOXEL SELECTED: {mx}, {my}, {mz}"
+                        
+                        # Force texture update on next render
+                        self.selection_texture = None
+                        self.pickup_msg_timer = 2.0
+                        renpy.restart_interaction() # Update Sidebar
+                    else:
+                        self.highlight_pos = (-1.0, -1.0, -1.0)
+
+                if ev.key == pygame.K_w: self.kb_speed = 1.0
                 if ev.key == pygame.K_LCTRL or ev.key == pygame.K_RCTRL: self.kb_running = True
 
             if ev.type == pygame.KEYUP:
