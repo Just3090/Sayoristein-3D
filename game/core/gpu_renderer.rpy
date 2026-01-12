@@ -2476,6 +2476,116 @@ init -10 python:
             renpy.redraw(self, 0.000001)
             return renderer
 
+    def add_keyframe(anim_data, track, time, value, easing="linear"):
+        """Inserts or updates a keyframe in the animation data."""
+        if track not in anim_data["tracks"]:
+            anim_data["tracks"][track] = []
+        
+        updated = False
+        for k in anim_data["tracks"][track]:
+            if abs(k["time"] - time) < 0.001:
+                k["value"] = value
+                k["easing"] = easing
+                updated = True
+                break
+        
+        if not updated:
+            anim_data["tracks"][track].append({ "time": time, "value": value, "easing": easing })
+        
+        # Sort by time
+        anim_data["tracks"][track].sort(key=lambda x: x["time"])
+
+    def remove_keyframe(anim_data, track, time):
+        """Removes a keyframe at specific time."""
+        if track in anim_data["tracks"]:
+            anim_data["tracks"][track] = [k for k in anim_data["tracks"][track] if abs(k["time"] - time) > 0.001]
+
+    def get_anim_value_at_time(anim_data, track, time, default_val=0.0):
+        """Calculates interpolated value for a track at a given time."""
+        if track not in anim_data["tracks"] or not anim_data["tracks"][track]:
+            return default_val
+            
+        keyframes = anim_data["tracks"][track]
+        
+        # Boundary checks
+        if time <= keyframes[0]["time"]: return keyframes[0]["value"]
+        if time >= keyframes[-1]["time"]: return keyframes[-1]["value"]
+        
+        # Interpolation
+        for i in range(len(keyframes) - 1):
+            k1 = keyframes[i]
+            k2 = keyframes[i+1]
+            
+            if time >= k1["time"] and time < k2["time"]:
+                duration = k2["time"] - k1["time"]
+                if duration <= 0: return k1["value"]
+                
+                t = (time - k1["time"]) / duration
+                
+                # Linear Interpolation
+                return k1["value"] + (k2["value"] - k1["value"]) * t
+                
+        return default_val
+
+    def apply_animation_frame(anim_data, target_obj, time):
+        """Updates the target object properties based on animation data at 'time'."""
+        if not target_obj: return
+        
+        target_obj.x = get_anim_value_at_time(anim_data, "x", time, target_obj.x)
+        target_obj.y = get_anim_value_at_time(anim_data, "y", time, target_obj.y)
+        target_obj.z = get_anim_value_at_time(anim_data, "z", time, target_obj.z)
+
+    class AnimationController(object):
+        def __init__(self, owner):
+            self.owner = owner
+            self.anim_data = None
+            self.anim_name = None
+            self.current_time = 0.0
+            self.is_playing = False
+            self.loop = False
+            self.duration = 0.0
+            self.ox = 0.0
+            self.oy = 0.0
+            self.oz = 0.0
+
+        def play(self, anim_name, loop=True):
+            if hasattr(renpy.store, 'load_anim_json'):
+                data = renpy.store.load_anim_json(anim_name + ".json")
+                if data:
+                    self.anim_data = data
+                    self.anim_name = anim_name
+                    self.current_time = 0.0
+                    self.duration = float(data['meta'].get('duration', 1.0))
+                    self.loop = loop 
+                    self.is_playing = True
+                    self.ox = 0.0; self.oy = 0.0; self.oz = 0.0
+                else:
+                    print(f"Animation {anim_name} not found.")
+
+        def stop(self):
+            self.is_playing = False
+            self.anim_name = None
+            self.ox = 0.0; self.oy = 0.0; self.oz = 0.0
+
+        def update(self, dt):
+            if not self.is_playing or not self.anim_data:
+                self.ox = 0.0; self.oy = 0.0; self.oz = 0.0
+                return
+
+            self.current_time += dt
+            
+            if self.current_time >= self.duration:
+                if self.loop:
+                    self.current_time %= self.duration
+                else:
+                    self.current_time = self.duration
+                    self.is_playing = False
+            
+            # Apply offsets (relative to 0.0)
+            self.ox = get_anim_value_at_time(self.anim_data, "x", self.current_time, 0.0)
+            self.oy = get_anim_value_at_time(self.anim_data, "y", self.current_time, 0.0)
+            self.oz = get_anim_value_at_time(self.anim_data, "z", self.current_time, 0.0)
+
     class SceneObject(object):
         def __init__(self, x, y, z, filename, model_parts=[]):
             self.x = float(x)
@@ -2494,7 +2604,7 @@ init -10 python:
             self.visible = True
 
     class VoxelEntity(object):
-        def __init__(self, wm, x, y, z, filename=MODEL_VOXEL_BASIC, health=100, damage=10, speed=2.0, attack_range=12.0, cooldown=1.5):
+        def __init__(self, wm, x, y, z, filename=MODEL_VOXEL_BASIC, health=100, damage=10, speed=2.0, attack_range=12.0, cooldown=1.5, walk_anim=ANIM_VOXEL_WALK, shoot_anim=ANIM_VOXEL_SHOOT):
             self.wm = wm
             self.x = float(x)
             self.y = float(y)
@@ -2502,6 +2612,10 @@ init -10 python:
             self.health = health
             self.dead = False
             self.filename = filename
+            
+            # Animation Names
+            self.anim_walk = walk_anim
+            self.anim_shoot = shoot_anim
             
             # Combat Stats
             self.damage = damage
@@ -2533,6 +2647,9 @@ init -10 python:
                 self.max_x = max(xs) + 1.0
                 self.max_y = max(ys) + 1.0
                 self.max_z = max(zs) + 1.0
+            
+            # Animation
+            self.anim_controller = AnimationController(self)
             
             # Visual
             self.visual = SceneObject(x, y, z, filename, model_parts=parts)
@@ -2580,6 +2697,9 @@ init -10 python:
                 False
             )
             renpy.sound.play("sounds/e-gunshot.ogg", channel="audio")
+            
+            # Play recoil animation using the configured name
+            self.anim_controller.play(self.anim_shoot, loop=False)
 
         def take_damage(self, amount):
             self.health -= amount
@@ -2602,38 +2722,59 @@ init -10 python:
             dy = player.y - self.y
             dist = math.sqrt(dx*dx + dy*dy)
             
+            # Vision and Attack logic
             if dist < self.attack_range:
                 if self.has_line_of_sight(player.x, player.y):
                     if self.attack_timer <= 0:
                         self.attack(player)
             
+            # Movement logic (AI)
+            is_moving = False
             if dist > 2.0 and dist < 25.0:
-                step = self.move_speed * dt
-                dir_x = (dx / dist) * step
-                dir_y = (dy / dist) * step
+                speed = self.move_speed * dt
                 
                 # Collision Logic
                 try:
                     map_addr, _ = self.wm.flat_map_buffer.buffer_info()
                     nx, ny = SteinWrapper.resolve_movement(
                         self.x, self.y, self.z,
-                        dir_x, dir_y,
+                        (dx / dist) * speed, (dy / dist) * speed,
                         0.4, # Enemy Radius
                         map_addr,
                         self.wm.mapWidth, self.wm.mapHeight, self.wm.num_layers, self.wm.min_layer
                     )
                     self.x = nx
                     self.y = ny
+                    is_moving = True
                 except:
-                    pass
+                    self.x += (dx / dist) * speed
+                    self.y += (dy / dist) * speed
+                    is_moving = True
             
-            self.visual.x = self.x
-            self.visual.y = self.y
-            self.visual.z = self.z
+            # Animation Controller Update
+            # Auto-play walking animation if moving
+            if is_moving:
+                # Don't override special animations like recoil unless they are finished
+                if not self.anim_controller.is_playing or self.anim_controller.anim_name == self.anim_walk:
+                    if self.anim_controller.anim_name != self.anim_walk:
+                        self.anim_controller.play(self.anim_walk, loop=True)
+            else:
+                # Stop walking if idle
+                if self.anim_controller.is_playing and self.anim_controller.anim_name == self.anim_walk:
+                    self.anim_controller.stop()
+
+            self.anim_controller.update(dt)
+            
+            # Sync visual (logic position + animation offset)
+            self.visual.x = self.x + self.anim_controller.ox
+            self.visual.y = self.y + self.anim_controller.oy
+            self.visual.z = self.z + self.anim_controller.oz
 
     class VoxelSniper(VoxelEntity):
         def __init__(self, wm, x, y, z, filename=MODEL_VOXEL_SNIPER, health=80):
-            super(VoxelSniper, self).__init__(wm, x, y, z, filename, health, damage=25, speed=3.5, attack_range=20.0, cooldown=2.0)
+            super(VoxelSniper, self).__init__(wm, x, y, z, filename, health, 
+                damage=25, speed=3.5, attack_range=20.0, cooldown=2.0,
+                walk_anim=ANIM_VOXEL_SNIPER_WALK, shoot_anim=ANIM_VOXEL_SNIPER_SHOOT)
             self.dodge_cooldown = 4.0
             self.dodge_timer = 0.0
             self.bullet_texture_index = 14 # Sniper bullet
@@ -2679,7 +2820,9 @@ init -10 python:
 
     class VoxelElite(VoxelEntity):
         def __init__(self, wm, x, y, z, filename=MODEL_VOXEL_ELITE, health=100):
-            super(VoxelElite, self).__init__(wm, x, y, z, filename, health, damage=3, speed=2.5, attack_range=15.0, cooldown=0.1)
+            super(VoxelElite, self).__init__(wm, x, y, z, filename, health, 
+                damage=3, speed=2.5, attack_range=15.0, cooldown=0.1,
+                walk_anim=ANIM_VOXEL_ELITE_WALK, shoot_anim=ANIM_VOXEL_ELITE_SHOOT)
             self.burst_limit = 10
             self.shots_fired_in_burst = 0
             self.is_reloading = False
@@ -2709,7 +2852,10 @@ init -10 python:
 
     class VoxelYuritler(VoxelEntity):
         def __init__(self, wm, x, y, z, filename=MODEL_VOXEL_YURITLER, health=150):
-            super(VoxelYuritler, self).__init__(wm, x, y, z, filename, health, damage=5, speed=1.8, attack_range=12.0, cooldown=1.0)
+            super(VoxelYuritler, self).__init__(wm, x, y, z, filename, health, 
+                damage=5, speed=1.8, attack_range=12.0, cooldown=1.0,
+                walk_anim=ANIM_VOXEL_YURITLER_WALK, shoot_anim=ANIM_VOXEL_YURITLER_SHOOT)
+            self.coin_index = 12
 
 
     class GPURenpystein(renpy.Displayable):

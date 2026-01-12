@@ -1,0 +1,90 @@
+{
+    "meta": {
+        "name": "new_anim",
+        "duration": 0.58,
+        "loop": true
+    },
+    "tracks": {
+        "x": [
+            {
+                "time": 0.0,
+                "value": 0.0,
+                "easing": "linear"
+            },
+            {
+                "time": 0.12585034013605442,
+                "value": -0.2,
+                "easing": "linear"
+            },
+            {
+                "time": 0.3163265306122449,
+                "value": 0.0,
+                "easing": "linear"
+            },
+            {
+                "time": 0.4421768707482993,
+                "value": 0.2,
+                "easing": "linear"
+            },
+            {
+                "time": 0.5714285714285714,
+                "value": 0.0,
+                "easing": "linear"
+            }
+        ],
+        "y": [
+            {
+                "time": 0.0,
+                "value": 0.0,
+                "easing": "linear"
+            },
+            {
+                "time": 0.12585034013605442,
+                "value": -0.1,
+                "easing": "linear"
+            },
+            {
+                "time": 0.3163265306122449,
+                "value": 0.0,
+                "easing": "linear"
+            },
+            {
+                "time": 0.4421768707482993,
+                "value": -0.1,
+                "easing": "linear"
+            },
+            {
+                "time": 0.5714285714285714,
+                "value": 0.0,
+                "easing": "linear"
+            }
+        ],
+        "z": [
+            {
+                "time": 0.0,
+                "value": 0.0,
+                "easing": "linear"
+            },
+            {
+                "time": 0.12585034013605442,
+                "value": 0.1,
+                "easing": "linear"
+            },
+            {
+                "time": 0.3163265306122449,
+                "value": 0.0,
+                "easing": "linear"
+            },
+            {
+                "time": 0.4421768707482993,
+                "value": 0.1,
+                "easing": "linear"
+            },
+            {
+                "time": 0.5714285714285714,
+                "value": 0.0,
+                "easing": "linear"
+            }
+        ]
+    }
+}

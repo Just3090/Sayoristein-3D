@@ -18,3 +18,16 @@ define MODEL_VOXEL_BASIC    = "random_enemy.json"
 define MODEL_VOXEL_SNIPER   = "random_enemy.json"
 define MODEL_VOXEL_ELITE    = "random_enemy.json"
 define MODEL_VOXEL_YURITLER = "random_enemy.json"
+
+# Default Animation Names
+define ANIM_VOXEL_WALK    = "walk"
+define ANIM_VOXEL_SHOOT   = "shoot_recoil"
+
+define ANIM_VOXEL_SNIPER_WALK  = "walk"
+define ANIM_VOXEL_SNIPER_SHOOT = "shoot_recoil"
+
+define ANIM_VOXEL_ELITE_WALK   = "walk"
+define ANIM_VOXEL_ELITE_SHOOT  = "shoot_recoil"
+
+define ANIM_VOXEL_YURITLER_WALK  = "walk"
+define ANIM_VOXEL_YURITLER_SHOOT = "shoot_recoil"

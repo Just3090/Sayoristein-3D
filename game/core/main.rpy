@@ -335,68 +335,6 @@ init python:
             
             renpy.restart_interaction()
 
-    # Animation Logic
-    def add_keyframe(anim_data, track, time, value, easing="linear"):
-        """Inserts or updates a keyframe in the animation data."""
-        if track not in anim_data["tracks"]:
-            anim_data["tracks"][track] = []
-        
-        updated = False
-        for k in anim_data["tracks"][track]:
-            if abs(k["time"] - time) < 0.001:
-                k["value"] = value
-                k["easing"] = easing
-                updated = True
-                break
-        
-        if not updated:
-            anim_data["tracks"][track].append({ "time": time, "value": value, "easing": easing })
-        
-        # Sort by time
-        anim_data["tracks"][track].sort(key=lambda x: x["time"])
-
-    def remove_keyframe(anim_data, track, time):
-        """Removes a keyframe at specific time."""
-        if track in anim_data["tracks"]:
-            anim_data["tracks"][track] = [k for k in anim_data["tracks"][track] if abs(k["time"] - time) > 0.001]
-
-    def get_anim_value_at_time(anim_data, track, time, default_val=0.0):
-        """Calculates interpolated value for a track at a given time."""
-        if track not in anim_data["tracks"] or not anim_data["tracks"][track]:
-            return default_val
-            
-        keyframes = anim_data["tracks"][track]
-        
-        # Boundary checks
-        if time <= keyframes[0]["time"]: return keyframes[0]["value"]
-        if time >= keyframes[-1]["time"]: return keyframes[-1]["value"]
-        
-        # Interpolation
-        for i in range(len(keyframes) - 1):
-            k1 = keyframes[i]
-            k2 = keyframes[i+1]
-            
-            if time >= k1["time"] and time < k2["time"]:
-                duration = k2["time"] - k1["time"]
-                if duration <= 0: return k1["value"]
-                
-                t = (time - k1["time"]) / duration
-                
-                # TODO: Implement Easing logic here (Quad, Cubic, etc.)
-                # Linear for testing
-                return k1["value"] + (k2["value"] - k1["value"]) * t
-                
-        return default_val
-
-    def apply_animation_frame(anim_data, target_obj, time):
-        """Updates the target object properties based on animation data at 'time'."""
-        if not target_obj: return
-        
-        target_obj.x = get_anim_value_at_time(anim_data, "x", time, target_obj.x)
-        target_obj.y = get_anim_value_at_time(anim_data, "y", time, target_obj.y)
-        target_obj.z = get_anim_value_at_time(anim_data, "z", time, target_obj.z)
-        # Add rotation later
-
     if 's' in config.keymap['screenshot']:
         config.keymap['screenshot'].remove('s')
     if 'alt_s' in config.keymap['screenshot']:

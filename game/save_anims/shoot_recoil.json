@@ -1,0 +1,15 @@
+{
+    "meta": {"name": "shoot_recoil", "duration": 0.3, "loop": false},
+    "tracks": {
+        "y": [
+            {"time": 0.0, "value": 0.0},
+            {"time": 0.05, "value": -0.4},
+            {"time": 0.3, "value": 0.0}
+            ],
+        "z": [
+            {"time": 0.0, "value": 0.0},
+            {"time": 0.1, "value": 0.2},
+            {"time": 0.3, "value": 0.0}
+        ]
+    }
+}
