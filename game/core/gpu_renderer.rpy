@@ -371,8 +371,12 @@ init -10 python:
         uniform float u_enable_shadows;
         uniform float u_max_dist;
         uniform float u_simple_floor;
+        uniform float u_obj_scale;
         uniform vec3 u_highlight_pos;
         uniform vec3 u_pivot_pos;
+        uniform vec3 u_group_offsets[16];
+        uniform float u_group_rots[16];
+        uniform vec3 u_group_pivots[16];
         uniform vec3 u_ambient_color;
         uniform vec3 u_ambient_near_color;
         varying vec2 v_tex_coord;
@@ -584,8 +588,6 @@ init -10 python:
                 int layer_idx = mapPos.z - i_layer_base;
                 
                 if (layer_idx >= 0 && layer_idx < i_layer_count) {
-                    // Vectorized UV math
-                    // float u = (float(mapPos.x) + 0.5) * u_map_tex_pixel_size.x; ...
                     vec2 cellUV = (vec2(float(mapPos.x), float(mapPos.y)) + 0.5) * u_map_tex_pixel_size;
                     vec2 mapUV = vec2(cellUV.x, cellUV.y + float(layer_idx) * u_map_layer_norm_height);
                     
@@ -617,15 +619,16 @@ init -10 python:
             if (modelID < 0.0) continue;
             
             float tFarBox;
-            float tNearBox = intersectAABB(rayPos, rayDir, objPos, objPos + vec3(1.0), tFarBox);
+            float tNearBox = intersectAABB(rayPos, rayDir, objPos, objPos + vec3(u_obj_scale), tFarBox);
             
             if (tNearBox < tFarBox && tFarBox > 0.0 && tNearBox < objDist) {
-                float tStart = max(0.0, tNearBox);
+                // Add tiny epsilon to enter the box safely
+                float tStart = max(0.0, tNearBox + 0.0001); 
                 
                 vec3 enterPos = rayPos + rayDir * tStart - objPos;
                 
-                // Scale up by 16.0 (Grid 16x16x16)
-                vec3 localPos = enterPos * 16.0;
+                float invScale = 16.0 / u_obj_scale;
+                vec3 localPos = enterPos * invScale;
                 vec3 localDir = rayDir; 
                 
                 // Local DDA
@@ -639,12 +642,11 @@ init -10 python:
                 if (localDir.y < 0.0) { lStepDir.y = -1; lSideDist.y = (localPos.y - float(lMapPos.y)) * lDeltaDist.y; }
                 else                  { lStepDir.y = 1;  lSideDist.y = (float(lMapPos.y) + 1.0 - localPos.y) * lDeltaDist.y; }
                 if (localDir.z < 0.0) { lStepDir.z = -1; lSideDist.z = (localPos.z - float(lMapPos.z)) * lDeltaDist.z; }
-                else                  { lStepDir.z = 1;  lSideDist.z = (float(lMapPos.z) + 1.0 - localPos.z) * lDeltaDist.z; }
+                else                  { lStepDir.z = 1;  lSideDist.z = (float(lMapPos.z) + 1.0 - lMapPos.z) * lDeltaDist.z; }
                 
                 int lHit = 0;
                 int lSide = 0;
                 
-                // Max steps for 16x16x16 is ~48 (diagonal), use 80 safely
                 for(int j=0; j<80; j++) {
                     if (lSideDist.x < lSideDist.y) {
                         if (lSideDist.x < lSideDist.z) {
@@ -666,10 +668,8 @@ init -10 python:
                     float tu = (float(lMapPos.z) * 16.0 + float(lMapPos.x) + 0.5) / 256.0;
                     float tv = (modelID * 16.0 + float(lMapPos.y) + 0.5) / (16.0 * max(1.0, u_num_models));
                     
-                    // Force LOD 0 (-16.0 bias) for mipmaps
                     vec4 val = texture2D(u_model_atlas, vec2(tu, tv), -16.0);
                     
-                    // Check alpha to confirm voxel existence and unpremultiply to recover true ID
                     if (val.a > 0.5) { 
                         int voxID = int((val.g / val.a) * 255.0 + 0.5);
                         if (voxID > 0) {
@@ -682,9 +682,9 @@ init -10 python:
                 
                 if (lHit == 1) {
                         float distInBox = 0.0;
-                        if (lSide == 0) distInBox = (lSideDist.x - lDeltaDist.x) / 16.0;
-                        else if (lSide == 1) distInBox = (lSideDist.y - lDeltaDist.y) / 16.0;
-                        else distInBox = (lSideDist.z - lDeltaDist.z) / 16.0;
+                        if (lSide == 0) distInBox = (lSideDist.x - lDeltaDist.x) / invScale;
+                        else if (lSide == 1) distInBox = (lSideDist.y - lDeltaDist.y) / invScale;
+                        else distInBox = (lSideDist.z - lDeltaDist.z) / invScale;
                         
                         float totalDist = tStart + distInBox;
                         
@@ -843,17 +843,17 @@ init -10 python:
                             vec2 offset = perp * offScale;
                             
                             vec2 targetPos = lightPos + offset;
-                            vec2 rayDir = normalize(targetPos - hitPos.xy);
-                            float rayDist = distance(targetPos, hitPos.xy);
+                            vec2 lightRayDir = normalize(targetPos - hitPos.xy);
+                            float lightRayDist = distance(targetPos, hitPos.xy);
                             
                             float stepSize = 0.2;
-                            int steps = int(rayDist / stepSize);
-                            vec2 checkPos = hitPos.xy + rayDir * 0.1;
+                            int steps = int(lightRayDist / stepSize);
+                            vec2 checkPos = hitPos.xy + lightRayDir * 0.1;
                             bool hitWall = false;
                             
                             for(int s=0; s<64; s++) { 
                                 if (s >= steps) break;
-                                checkPos += rayDir * stepSize;
+                                checkPos += lightRayDir * stepSize;
                                 
                                 if (abs(floor(checkPos.x) - float(mapPos.x)) < 0.1 && abs(floor(checkPos.y) - float(mapPos.y)) < 0.1) continue;
 
@@ -894,7 +894,7 @@ init -10 python:
 
             // Highlight Voxel (Editor Selection)
             // Single highlight pos (cursor)
-            bool is_selected = (vec3(mapPos) == u_highlight_pos);
+            bool is_selected = (distance(vec3(mapPos), u_highlight_pos) < 0.1);
             
             // Multi-selection map
             vec2 cellUV_sel = (vec2(float(mapPos.x), float(mapPos.y)) + 0.5) * u_map_tex_pixel_size;
@@ -916,7 +916,7 @@ init -10 python:
             }
 
             // Pivot Highlight (Cyan)
-            if (vec3(mapPos) == u_pivot_pos) {
+            if (distance(vec3(mapPos), u_pivot_pos) < 0.1) {
                 color = mix(color, vec3(0.0, 1.0, 1.0), 0.6);
             }
 
@@ -1189,17 +1189,17 @@ init -10 python:
                                         vec2 offset = perp * offScale;
                                         
                                         vec2 targetPos = lData.xy + offset;
-                                        vec2 rayDir = normalize(targetPos - spritePos);
-                                        float rayDist = distance(targetPos, spritePos);
+                                        vec2 sprLightRayDir = normalize(targetPos - spritePos);
+                                        float sprLightRayDist = distance(targetPos, spritePos);
                                         
                                         float stepSize = 0.2;
-                                        int steps = int(rayDist / stepSize);
-                                        vec2 checkPos = spritePos + rayDir * 0.1;
+                                        int steps = int(sprLightRayDist / stepSize);
+                                        vec2 checkPos = spritePos + sprLightRayDir * 0.1;
                                         bool hitWall = false;
                                         
                                         for(int s=0; s<64; s++) {
                                             if (s >= steps) break;
-                                            checkPos += rayDir * stepSize;
+                                            checkPos += sprLightRayDir * stepSize;
                                             
                                             vec2 mapUV = (floor(checkPos) + 0.5) / u_map_size;
                                             mapUV *= u_map_uv_scale;
@@ -2349,30 +2349,36 @@ init -10 python:
             # Pass Objects (Voxel Models)
             active_objects = []
             
-            # Use mutable scene_objects if available
-            source_objects = getattr(c, 'scene_objects', [])
-            
-            if source_objects:
-                count = 0
-                for obj in source_objects:
-                    if count >= 128: break
-                    if not getattr(obj, 'visible', True): continue
+            # Rig Groups (Dynamic Bone Objects)
+            if c.editor_mode:
+                for gname, gdata in c.voxel_groups.items():
+                    # Get accumulated world transform for this bone
+                    wt = c.get_group_accumulated_transform(gname)
+                    # Get the virtual model parts for this group
+                    parts = c.loaded_models.get(gname, [])
+                    
+                    for ox, oy, oz, mid in parts:
+                        if len(active_objects) >= 128: break
+                        # Position = Model Base (0,0,0) + Bone Offset + Piece Offset
+                        # NOTE: In Editor, global offset is handled by Camera, so we only apply Bone Offset
+                        wx = float(wt['x']) + float(ox)
+                        wy = float(wt['y']) + float(oy)
+                        wz = float(wt['z']) + float(oz)
+                        active_objects.append((wx, wy, wz, float(mid)))
 
-                    # Iterate parts
+            # Scene Objects (Standard Decoration)
+            source_objects = getattr(c, 'scene_objects', [])
+            if source_objects:
+                for obj in source_objects:
+                    if len(active_objects) >= 128: break
+                    if not getattr(obj, 'visible', True): continue
                     parts = getattr(obj, 'model_parts', [])
                     for ox, oy, oz, mid in parts:
-                        if count >= 128: 
-                            # print("W: Max object limit (128) reached")
-                            break
-                        
-                        # Apply offsets relative to object world position
-                        # TODO: Apply Rotation/Scale
+                        if len(active_objects) >= 128: break
                         wx = obj.x + float(ox)
                         wy = obj.y + float(oy)
                         wz = obj.z + float(oz)
-                        
                         active_objects.append((wx, wy, wz, float(mid)))
-                        count += 1
             
             num_valid_objects = len(active_objects)
             
@@ -2496,6 +2502,10 @@ init -10 python:
             renderer.add_uniform('u_ambient_near_color', current_ambient_near)
             renderer.add_uniform('u_highlight_pos', getattr(c, 'highlight_pos', (-1.0, -1.0, -1.0)))
             renderer.add_uniform('u_pivot_pos', getattr(c, 'current_pivot', (-1.0, -1.0, -1.0)))
+            renderer.add_uniform('u_group_offsets', getattr(c, 'shader_group_offsets', [(0.0,0.0,0.0)] * 16))
+            renderer.add_uniform('u_group_rots', getattr(c, 'shader_group_rots', [0.0] * 16))
+            renderer.add_uniform('u_group_pivots', getattr(c, 'shader_group_pivots', [(0.0,0.0,0.0)] * 16))
+            renderer.add_uniform('u_obj_scale', 16.0 if c.editor_mode else 1.0)
 
             renderer.add_uniform('u_map_size', (float(c.map_w), float(c.map_h)))
             renderer.add_uniform('u_map_uv_scale', c.map_uv_scale)
@@ -2594,6 +2604,7 @@ init -10 python:
         """Updates the target object properties based on animation data at 'time'."""
         if not target_obj: return
         
+        # Apply Global Tracks
         target_obj.x = get_anim_value_at_time(anim_data, "x", time, target_obj.x)
         target_obj.y = get_anim_value_at_time(anim_data, "y", time, target_obj.y)
         target_obj.z = get_anim_value_at_time(anim_data, "z", time, target_obj.z)
@@ -2605,6 +2616,19 @@ init -10 python:
         target_obj.sx = get_anim_value_at_time(anim_data, "sx", time, getattr(target_obj, 'sx', 1.0))
         target_obj.sy = get_anim_value_at_time(anim_data, "sy", time, getattr(target_obj, 'sy', 1.0))
         target_obj.sz = get_anim_value_at_time(anim_data, "sz", time, getattr(target_obj, 'sz', 1.0))
+
+        # Apply Group Tracks
+        # Scans JSON for tracks like "group:Arm:x"
+        if "tracks" in anim_data:
+            for track_name in anim_data["tracks"].keys():
+                if track_name.startswith("group:"):
+                    parts = track_name.split(":")
+                    if len(parts) >= 3:
+                        gname = parts[1]
+                        field = parts[2]
+                        # Update the target object's local group data
+                        gdata = target_obj.get_group_data(gname)
+                        gdata[field] = get_anim_value_at_time(anim_data, track_name, time, gdata.get(field, 0.0))
 
     class AnimationController(object):
         def __init__(self, owner):
@@ -2968,6 +2992,8 @@ init -10 python:
             self.selected_group = "None" # Currently active vertex group
             self.selection_map = {} # Map of (x,y,z) is bool
             self.voxel_groups = {} # Map of "GroupName" is {voxels, pivot, parent}
+            self.master_voxels = [] # Original model voxels (x, y, z, id)
+            self.last_rig_state = None # For optimization
             self.show_bones = True # Visual toggle for skeleton
             self.selection_texture = None
             self.objects_def = objects # List of (x, y, z, filename) 
@@ -3569,98 +3595,71 @@ init -10 python:
 
         def create_model_atlas(self, objects_def):
             self.loaded_models = {}
-            if not objects_def:
+            if not objects_def and not getattr(self, 'voxel_groups', None):
                 s = pygame.Surface((1,1), flags=pygame.SRCALPHA, depth=32)
                 return renpy.display.draw.load_texture(s), 0.0
 
             unique_files = sorted(list(set([o[3] for o in objects_def])))
-
-            # Temporary structure to hold all identified chunks from all models
-            # List of { 'grid': {z: [[rows]]}, 'filename': str }
             all_chunks = []
             
-            # print("--- RENPYSTEIN OBJECT LOADER DEBUG ---")
+            # Load Standard Files
             for filename in unique_files:
-                print(f"I: Processing object file: {filename}")
                 try:
                     data = renpy.store.load_object_json(filename)
                 except:
-                    print(f"E: Failed to load object model: {filename}")
                     data = None
 
-
                 if data:
-                    # Chunks dict: key=(cx, cy, cz), value=layers dict
                     model_chunks = {} 
-                    total_tiles_found = 0
-                    
                     layers = {}
-                    # Try to handle it as dict-like
                     try:
-                        iterator = []
-                        if hasattr(data, 'items'):
-                            iterator = data.items()
-                        elif isinstance(data, dict):
-                            iterator = data.items()
-
+                        iterator = data.items() if hasattr(data, 'items') else []
                         for k, v in iterator:
-                            try:
-                                layers[int(k)] = v
-                            except:
-                                pass
-                    except Exception as e:
-                        print(f"E: Model loading iteration error: {e}")
+                            layers[int(k)] = v
+                    except: pass
 
-                    # if isinstance(data, dict):
-                    #     # print(f"DEBUG: Data Type: {type(data)} Keys: {list(data.keys())}")
-                    #     for k, v in data.items():
-                    #         try:
-                    #             layers[int(k)] = v
-                    #         except Exception as e:
-                    #             print(f"DEBUG: Failed to parse layer key {k}: {e}")
-                    #             pass
-                    
-                    print(f"I: Data loaded for {filename}. Z-Levels found: {list(layers.keys())}")
-
-                    for z, grid in layers.items():
-                        cz = z // 16
-                        lz = z % 16
-                        
-                        for x, row in enumerate(grid):
-                            cx = x // 16
-                            lx = x % 16
-                            
-                            for y, tile in enumerate(row):
-                                cy = y // 16
-                                ly = y % 16
-                                
+                    for lz, grid in layers.items():
+                        for lx, row in enumerate(grid):
+                            for ly, tile in enumerate(row):
                                 if tile > 0:
-                                    total_tiles_found += 1
+                                    cx, cy, cz = lx // 16, ly // 16, lz // 16
                                     chunk_key = (cx, cy, cz)
                                     if chunk_key not in model_chunks:
-                                        # Initialize empty chunk grid (0..15 z levels)
-                                        model_chunks[chunk_key] = {}
-                                        for iz in range(16):
-                                            model_chunks[chunk_key][iz] = [[0]*16 for _ in range(16)]
-                                    
-                                    model_chunks[chunk_key][lz][lx][ly] = tile
+                                        model_chunks[chunk_key] = {z: [[0 for _ in range(16)] for _ in range(16)] for z in range(16)}
+                                    model_chunks[chunk_key][lz%16][lx%16][ly%16] = tile
                     
-                    print(f"I: File {filename} contained {total_tiles_found} voxels.")
-                    print(f"I: Generated {len(model_chunks)} chunks for {filename}: {list(model_chunks.keys())}")
-
-                    # Register these chunks
                     self.loaded_models[filename] = []
-
-                    
-                    # Sort keys to ensure deterministic order isnt strictly necessary but good for debug
                     for (cx, cy, cz), chunk_grid in model_chunks.items():
-                        # Assign a new global ID
                         atlas_id = len(all_chunks)
                         all_chunks.append(chunk_grid)
+                        self.loaded_models[filename].append((cx*16, cy*16, cz*16, atlas_id))
+
+            # Load Rig Groups as Virtual Models (Editor Only)
+            if self.editor_mode and getattr(self, 'master_voxels', None):
+                # Pre-build a dict for integer lookup
+                id_lookup = {}
+                for v in self.master_voxels:
+                    id_lookup[(int(v[0]), int(v[1]), int(v[2]))] = int(v[3])
+                
+                for gname, gdata in self.voxel_groups.items():
+                    model_chunks = {}
+                    for pos in gdata.get('voxels', []):
+                        vx, vy, vz = int(pos[0]), int(pos[1]), int(pos[2])
+                        # Get original ID or fallback to 1 only if absolutely missing
+                        tid = id_lookup.get((vx, vy, vz), 1)
                         
-                        # Store the offset mapping for this file
-                        self.loaded_models[filename].append((cx, cy, cz, atlas_id))
-            
+                        cx, cy, cz = vx // 16, vy // 16, vz // 16
+                        chunk_key = (cx, cy, cz)
+                        if chunk_key not in model_chunks:
+                            model_chunks[chunk_key] = {z: [[0 for _ in range(16)] for _ in range(16)] for z in range(16)}
+                        model_chunks[chunk_key][vz % 16][vx % 16][vy % 16] = tid
+                    
+                    self.loaded_models[gname] = []
+                    for (cx, cy, cz), chunk_grid in model_chunks.items():
+                        atlas_id = len(all_chunks)
+                        all_chunks.append(chunk_grid)
+                        self.loaded_models[gname].append((cx*16, cy*16, cz*16, atlas_id))
+
             # Setup Atlas Surface
             num_total_chunks = len(all_chunks)
             if num_total_chunks == 0:
@@ -3669,31 +3668,20 @@ init -10 python:
 
             w = 256
             h = 16 * num_total_chunks
-            
             surf = pygame.Surface((w, h), flags=pygame.SRCALPHA, depth=32)
             surf.fill((0,0,0,0))
             
-            # Paint Chunks
             for i, chunk_layers in enumerate(all_chunks):
                 base_y_atlas = i * 16
-                
-                # Iterate the chunks local layers (0..15)
                 for z, rows in chunk_layers.items():
                     if z < 0 or z > 15: continue
-                    
                     base_x_atlas = z * 16
-                    
                     for x in range(16):
                         for y in range(16):
                             tile = rows[x][y]
                             if tile > 0:
-                                # Write to surface
-                                # The shader expects:
-                                # tu = (z * 16 + x + 0.5) / 256.0
-                                # tv = (modelID * 16 + y + 0.5) / (16 * num_models)
                                 surf.set_at((base_x_atlas + x, base_y_atlas + y), (255, tile, 0, 255))
 
-            print(f"RenPyStein GPU: Model Atlas Created. Size: {w}x{h}. Total Chunks: {num_total_chunks}")
             return renpy.display.draw.load_texture(surf), float(num_total_chunks)
 
         def create_map_texture(self):
@@ -3708,34 +3696,17 @@ init -10 python:
                 for k, v in self.worldMap.items():
                     try:
                         layers[int(k)] = v
-                    except (ValueError, TypeError):
-                        print(f"GPURenpystein Warning: ignored non-integer layer key '{k}'")
+                    except: pass
             
             self.worldMap = layers 
-                
-            # Find max dimensions
-            max_x = 0
-            max_y = 0
-            min_z = 0
-            max_z = 0
-            
+            max_x = 0; max_y = 0; min_z = 0; max_z = 0
             if layers:
-                min_z = min(layers.keys())
-                max_z = max(layers.keys())
+                min_z = min(layers.keys()); max_z = max(layers.keys())
                 for z, grid in layers.items():
                     if len(grid) > max_x: max_x = len(grid)
                     if len(grid) > 0 and len(grid[0]) > max_y: max_y = len(grid[0])
             
-            self.map_w = max_x
-            self.map_h = max_y
-            self.min_layer = min_z
-            self.max_layer = max_z
-            self.num_layers = max_z - min_z + 1
-
-            self.flat_map_buffer = flatten_world_map(
-                self.worldMap, self.map_w, self.map_h, 
-                self.min_layer, self.max_layer
-            )
+            self.map_w = max_x; self.map_h = max_y; self.min_layer = min_z; self.max_layer = max_z; self.num_layers = max_z - min_z + 1
             
             layer_h_pixels = next_power_of_two(max_y)
             w_pot = max(64, next_power_of_two(max_x))
@@ -3744,24 +3715,34 @@ init -10 python:
             surf = pygame.Surface((w_pot, h_pot), flags=pygame.SRCALPHA, depth=32)
             surf.fill((0,0,0,255))
             
+            # Identify ALL voxels that belong to any group
+            grouped_lookup = set()
+            for gdata in self.voxel_groups.values():
+                for v in gdata.get('voxels', []):
+                    grouped_lookup.add((int(v[0]), int(v[1]), int(v[2])))
+
             for z, grid in layers.items():
                 layer_idx = z - min_z
                 base_y = layer_idx * layer_h_pixels
-                
                 for map_x, row in enumerate(grid):
                     for map_y, tile in enumerate(row):
                         if tile > 0:
+                            # Strict removal: if it is grouped, do not draw in static map
+                            if (int(map_x), int(map_y), int(z)) in grouped_lookup:
+                                continue
                             surf.set_at((map_x, base_y + map_y), (255, tile, 0, 255))
             
-            tex = renpy.display.draw.load_texture(surf)
+            self.flat_map_buffer = flatten_world_map(
+                self.worldMap, self.map_w, self.map_h, 
+                self.min_layer, self.max_layer
+            )
             
             # Calculate uniforms
             self.map_layer_norm_height = float(layer_h_pixels) / float(h_pot)
             self.map_tex_pixel_size = (1.0 / float(w_pot), 1.0 / float(h_pot))
-            
             self.map_uv_scale = (float(max_x) / float(w_pot), float(max_y) / float(layer_h_pixels)) 
             
-            return tex
+            return renpy.display.draw.load_texture(surf)
 
         def update_selection_texture(self):
             """Updates the selection texture based on selection_map and bones."""
@@ -3812,20 +3793,44 @@ init -10 python:
             self.selection_texture = renpy.display.draw.load_texture(surf)
 
         def assign_to_group(self, name):
-            """Assigns currently selected voxels to a group with its pivot."""
+            """Assigns currently selected voxels to a group, removing them from any other group."""
             if not name: return
             
-            # Preserve existing parent if group exists
-            old_parent = None
-            if name in self.voxel_groups:
-                old_parent = self.voxel_groups[name].get("parent")
-
+            selected_coords = [list(pos) for pos in self.selection_map.keys()]
+            
+            # Update the group data
+            old_parent = self.voxel_groups.get(name, {}).get("parent")
             self.voxel_groups[name] = {
-                "voxels": [list(pos) for pos in self.selection_map.keys()],
+                "voxels": selected_coords,
                 "pivot": list(self.current_pivot),
                 "parent": old_parent
             }
-            renpy.notify(f"Assigned {len(self.voxel_groups[name]['voxels'])} voxels to '{name}'")
+            
+            # Clean overlaps and refresh textures
+            self.clean_and_bake_rig()
+            renpy.notify(f"Assigned {len(selected_coords)} voxels to '{name}'")
+
+        def clean_and_bake_rig(self):
+            """Ensures each voxel belongs to only one group and refreshes all textures."""
+            if not self.editor_mode: return
+            
+            used_voxels = set()
+            # Process groups in reverse order (newest/child-most groups first usually)
+            for gname in sorted(self.voxel_groups.keys(), reverse=True):
+                gdata = self.voxel_groups[gname]
+                new_voxels = []
+                for v in gdata.get("voxels", []):
+                    pos = (int(v[0]), int(v[1]), int(v[2]))
+                    if pos not in used_voxels:
+                        new_voxels.append(list(pos))
+                        used_voxels.add(pos)
+                gdata["voxels"] = new_voxels
+
+            # Re-generate everything to ensure visual consistency
+            self.model_atlas, self.num_models = self.create_model_atlas(self.objects_def)
+            self.map_texture = self.create_map_texture()
+            self.selection_texture = None
+            renpy.restart_interaction()
 
         def set_group_parent(self, name, parent_name):
             """Sets the parent for a group."""
@@ -3873,10 +3878,78 @@ init -10 python:
                 del self.voxel_groups[name]
                 renpy.restart_interaction()
 
+        def get_group_accumulated_transform(self, gname):
+            """Recursively calculates the world transform for a group based on its parents."""
+            if gname not in self.voxel_groups:
+                return {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}
+            
+            gdata = self.voxel_groups[gname]
+            local_t = self.editor_target.get_group_data(gname)
+            
+            pname = gdata.get("parent")
+            if pname and pname in self.voxel_groups:
+                pt = self.get_group_accumulated_transform(pname)
+                # Position is simple additive for now (Translation)
+                return {
+                    'x': pt['x'] + local_t.get('x', 0.0),
+                    'y': pt['y'] + local_t.get('y', 0.0),
+                    'z': pt['z'] + local_t.get('z', 0.0),
+                    'rz': pt.get('rz', 0.0) + local_t.get('rz', 0.0)
+                }
+            
+            return {
+                'x': local_t.get('x', 0.0),
+                'y': local_t.get('y', 0.0),
+                'z': local_t.get('z', 0.0),
+                'rz': local_t.get('rz', 0.0)
+            }
+
+        def refresh_rig_visuals(self):
+            """Prepares the rig for shader-based rendering.
+                Vertex Groups are converted into dynamic shader objects for smooth movement."""
+            if not self.editor_mode: return
+            
+            # Signature check to only rebuild if groups change
+            sig = sum([len(g.get('voxels', [])) for g in self.voxel_groups.values()]) + len(self.voxel_groups)
+            if getattr(self, '_last_rig_sig', -1) != sig:
+                # Re-bake static map (excludes grouped voxels)
+                self.map_texture = self.create_map_texture()
+                
+                # Create Dynamic Chunks for each group
+                rig_objects_def = []
+                for gname, gdata in self.voxel_groups.items():
+                    # Create a virtual filename for the chunk
+                    vname = f"chunk_{gname}"
+                    
+                    # Group voxels into a dict structure for the loader
+                    layers = {}
+                    for vx, vy, vz in gdata.get('voxels', []):
+                        if vz not in layers:
+                            # 16x16 is the standard chunk size
+                            layers[vz] = [[0 for _ in range(16)] for _ in range(16)]
+                        # Voxel local coords (mod 16 since chunks are 16x16)
+                        # For simplicity in editor, we use absolute coords and let create_model_atlas chunk it
+                        pass 
+                    
+                self._last_rig_sig = sig
+
         def render(self, width, height, st, at):
             if self.oldst is None: self.oldst = st
             dtime = st - self.oldst
             self.oldst = st
+
+            # When groups change, we must update both the Static Map (to hide voxels) 
+            # and the Model Atlas (to include the new bone chunks).
+            if self.editor_mode:
+                # sum of voxels across all groups + group count
+                sig = sum([len(g.get('voxels', [])) for g in self.voxel_groups.values()]) + len(self.voxel_groups)
+                if getattr(self, '_last_rig_sig', -1) != sig:
+                    # Update Atlas first so groups are available as models
+                    self.model_atlas, self.num_models = self.create_model_atlas(self.objects_def)
+                    # Then update Map to exclude those voxels
+                    self.map_texture = self.create_map_texture()
+                    self._last_rig_sig = sig
+            # -------------------------
 
             if dtime > 0.0:
                 inst_fps = 1.0 / dtime
@@ -3906,6 +3979,25 @@ init -10 python:
             self.player.dir = total_dir 
             self.player.move(dtime)
             
+            group_offsets = [(0.0, 0.0, 0.0)] * 16
+            group_rots = [0.0] * 16
+            group_pivots = [(0.0, 0.0, 0.0)] * 16
+            
+            if self.editor_mode:
+                for gname, gid in getattr(self, 'group_to_id', {}).items():
+                    if gid < 16:
+                        wt = self.get_group_accumulated_transform(gname)
+                        group_offsets[gid] = (wt['x'], wt['y'], wt['z'])
+                        group_rots[gid] = math.radians(wt['rz'])
+                        
+                        gdata = self.voxel_groups.get(gname, {})
+                        pivot = gdata.get('pivot', (0.0, 0.0, 0.0))
+                        group_pivots[gid] = (float(pivot[0]), float(pivot[1]), float(pivot[2]))
+            
+            self.shader_group_offsets = group_offsets
+            self.shader_group_rots = group_rots
+            self.shader_group_pivots = group_pivots
+
             self.update_logic(dtime)
 
             renpy.store.player_x = self.player.x

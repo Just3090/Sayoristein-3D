@@ -334,6 +334,18 @@ init python:
             renderer_obj.map_w = renderer_obj.mapWidth
             renderer_obj.map_h = renderer_obj.mapHeight
             
+            # Populate Master Voxels for Rigging
+            renderer_obj.master_voxels = []
+            for z_key, grid in data.items():
+                try:
+                    z = int(z_key) # Ensure Z is an integer
+                    for x, row in enumerate(grid):
+                        for y, tid in enumerate(row):
+                            if tid > 0:
+                                renderer_obj.master_voxels.append((x, y, z, tid))
+                except:
+                    pass
+            
             # Regenerate Texture
             renderer_obj.map_texture = renderer_obj.create_map_texture()
             
@@ -998,7 +1010,7 @@ screen animation_editor():
                                                     SetScreenVariable("current_anim_data", anim_content),
                                                     # Restore Groups to renderer
                                                     SetField(renderer, "voxel_groups", dict(anim_content.get("voxel_groups", {}))),
-                                                    SetField(renderer, "selection_texture", None),
+                                                    Function(renderer.clean_and_bake_rig),
                                                     Notify("Loaded animation and rig from [f]")
                                                 ]
                             
@@ -1160,92 +1172,106 @@ screen animation_editor():
                     
                     null height 10
                     
+                    null height 10
+                    
                     if renderer.editor_target:
-                        text "Transform Control" size 18 color "#AAA"
-                        hbox:
-                            spacing 10
-                            textbutton "GLOBAL":
-                                background Solid("#444" if edit_target_type == "global" else "#222")
-                                text_color ("#FFF" if edit_target_type == "global" else "#888")
-                                action SetScreenVariable("edit_target_type", "global")
-                                padding (10, 5)
-                            
-                            textbutton "GROUP":
-                                background Solid("#444" if edit_target_type == "group" else "#222")
-                                text_color ("#FFF" if edit_target_type == "group" else "#888")
-                                action SetScreenVariable("edit_target_type", "group")
-                                padding (10, 5)
+                        text "RIGGING CHANNELS" size 22 color "#FFF"
                         
-                        $ active_gname = None
-                        if edit_target_type == "group":
-                            $ active_gname = getattr(renderer, 'selected_group', "None")
-                            text "Editing Group: [active_gname]" size 12 color "#8AF"
-                        
-                        null height 10
-                        
-                        hbox:
-                            spacing 5
-                            # Reusing the same UI but with dynamic data source
-                            python:
+                        frame:
+                            background Solid("#333")
+                            xfill True padding (10, 10)
+                            vbox:
+                                spacing 5
+                                hbox:
+                                    text "Global Transform" size 16 color "#AAA" yalign 0.5
+                                    null width 10
+                                    textbutton ("ACTIVE" if edit_target_type == "global" else "SELECT"):
+                                        action SetScreenVariable("edit_target_type", "global")
+                                        text_size 12 text_color ("#0F0" if edit_target_type == "global" else "#666")
+
                                 if edit_target_type == "global":
-                                    target_data = renderer.editor_target
-                                    input_class = FloatInputValue
-                                    extra_args = []
-                                else:
-                                    target_data = renderer.editor_target
-                                    input_class = GroupFloatInputValue
-                                    extra_args = [active_gname]
-
-                            vbox:
-                                xsize 80
-                                text "Position" size 14 color "#666"
-                                for fld in ['x', 'y', 'z']:
                                     hbox:
-                                        text "[fld!u]: " color "#AAA" yalign 0.5 size 14
-                                        if editing_field == fld:
-                                            input value input_class(target_data, *(extra_args + [fld])) length 6 color "#FFF" pixel_width 50 action SetScreenVariable("editing_field", None)
-                                        else:
-                                            $ val = getattr(target_data, fld) if edit_target_type == "global" else target_data.get_group_data(active_gname).get(fld, 0.0)
-                                            textbutton "[val:.2f]" action SetScreenVariable("editing_field", fld) text_color "#FFF" text_size 14
-
-                            vbox:
-                                xsize 80
-                                text "Rotation" size 14 color "#666"
-                                for fld in ['rx', 'ry', 'rz']:
+                                        spacing 5
+                                        vbox:
+                                            xsize 80
+                                            text "Position" size 12 color "#666"
+                                            for fld in ['x', 'y', 'z']:
+                                                hbox:
+                                                    text "[fld!u]: " color "#AAA" yalign 0.5 size 12
+                                                    if editing_field == fld:
+                                                        input value FloatInputValue(renderer.editor_target, fld) length 6 color "#FFF" pixel_width 40 action SetScreenVariable("editing_field", None)
+                                                    else:
+                                                        textbutton "[getattr(renderer.editor_target, fld):.2f]" action SetScreenVariable("editing_field", fld) text_color "#FFF" text_size 12
+                                        vbox:
+                                            xsize 80
+                                            text "Rotation" size 12 color "#666"
+                                            for fld in ['rx', 'ry', 'rz']:
+                                                hbox:
+                                                    text "[fld!u]:" color "#AAA" yalign 0.5 size 12
+                                                    if editing_field == fld:
+                                                        input value FloatInputValue(renderer.editor_target, fld) length 6 color "#FFF" pixel_width 40 action SetScreenVariable("editing_field", None)
+                                                    else:
+                                                        textbutton "[getattr(renderer.editor_target, fld):.1f]" action SetScreenVariable("editing_field", fld) text_color "#FFF" text_size 12
+                                    
                                     hbox:
-                                        text "[fld!u]:" color "#AAA" yalign 0.5 size 14
-                                        if editing_field == fld:
-                                            input value input_class(target_data, *(extra_args + [fld])) length 6 color "#FFF" pixel_width 50 action SetScreenVariable("editing_field", None)
-                                        else:
-                                            $ val = getattr(target_data, fld) if edit_target_type == "global" else target_data.get_group_data(active_gname).get(fld, 0.0)
-                                            textbutton "[val:.1f]" action SetScreenVariable("editing_field", fld) text_color "#FFF" text_size 14
-
-                            vbox:
-                                xsize 80
-                                text "Scale" size 14 color "#666"
-                                for fld in ['sx', 'sy', 'sz']:
-                                    hbox:
-                                        text "[fld!u]:" color "#AAA" yalign 0.5 size 14
-                                        if editing_field == fld:
-                                            input value input_class(target_data, *(extra_args + [fld])) length 6 color "#FFF" pixel_width 50 action SetScreenVariable("editing_field", None)
-                                        else:
-                                            $ val = getattr(target_data, fld) if edit_target_type == "global" else target_data.get_group_data(active_gname).get(fld, 1.0)
-                                            textbutton "[val:.2f]" action SetScreenVariable("editing_field", fld) text_color "#FFF" text_size 14
+                                        spacing 10
+                                        textbutton "Add Global Key":
+                                            action [Function(add_keyframe_auto, "global", "None", renderer, current_anim_data, current_time), Notify("Global Keyframe added") ]
+                                            text_size 14 text_color "#8AF"
+                                        textbutton "Del":
+                                            action [Function(remove_keyframe_auto, "global", "None", current_anim_data, current_time), Notify("Global Keyframe removed") ]
+                                            text_size 14 text_color "#F66"
 
                         null height 10
-                        textbutton "Add Keyframe":
-                            action [
-                                Function(add_keyframe_auto, edit_target_type, active_gname, renderer, current_anim_data, current_time),
-                                Notify("Keyframe added at [current_time]s")
-                            ]
-                            xfill True
-                        
-                        textbutton "Remove Keyframe":
-                            action [
-                                Function(remove_keyframe_auto, edit_target_type, active_gname, current_anim_data, current_time),
-                                Notify("Keyframe removed at [current_time]s")
-                            ]
-                            xfill True
+
+                        $ active_gname = getattr(renderer, 'selected_group', "None")
+                        frame:
+                            background Solid("#333")
+                            xfill True padding (10, 10)
+                            vbox:
+                                spacing 5
+                                hbox:
+                                    text "Bone: [active_gname]" size 16 color "#AAA" yalign 0.5
+                                    null width 10
+                                    textbutton ("ACTIVE" if edit_target_type == "group" else "SELECT"):
+                                        action SetScreenVariable("edit_target_type", "group")
+                                        text_size 12 text_color ("#0F0" if edit_target_type == "group" else "#666")
+
+                                if edit_target_type == "group" and active_gname != "None":
+                                    $ gdata_obj = renderer.editor_target.get_group_data(active_gname)
+                                    hbox:
+                                        spacing 5
+                                        vbox:
+                                            xsize 80
+                                            text "Local Pos" size 12 color "#666"
+                                            for fld in ['x', 'y', 'z']:
+                                                hbox:
+                                                    text "[fld!u]: " color "#AAA" yalign 0.5 size 12
+                                                    if editing_field == fld:
+                                                        input value GroupFloatInputValue(renderer.editor_target, active_gname, fld) length 6 color "#FFF" pixel_width 40 action SetScreenVariable("editing_field", None)
+                                                    else:
+                                                        textbutton "[gdata_obj.get(fld, 0.0):.2f]" action SetScreenVariable("editing_field", fld) text_color "#FFF" text_size 12
+                                        vbox:
+                                            xsize 80
+                                            text "Local Rot" size 12 color "#666"
+                                            for fld in ['rx', 'ry', 'rz']:
+                                                hbox:
+                                                    text "[fld!u]:" color "#AAA" yalign 0.5 size 12
+                                                    if editing_field == fld:
+                                                        input value GroupFloatInputValue(renderer.editor_target, active_gname, fld) length 6 color "#FFF" pixel_width 40 action SetScreenVariable("editing_field", None)
+                                                    else:
+                                                        textbutton "[gdata_obj.get(fld, 0.0):.1f]" action SetScreenVariable("editing_field", fld) text_color "#FFF" text_size 12
+                                    
+                                    hbox:
+                                        spacing 10
+                                        textbutton "Add Bone Key":
+                                            action [Function(add_keyframe_auto, "group", active_gname, renderer, current_anim_data, current_time), Notify("Bone Keyframe added") ]
+                                            text_size 14 text_color "#8AF"
+                                        textbutton "Del":
+                                            action [Function(remove_keyframe_auto, "group", active_gname, current_anim_data, current_time), Notify("Bone Keyframe removed") ]
+                                            text_size 14 text_color "#F66"
+                                elif active_gname == "None":
+                                    text "Select a group to animate" size 12 color "#666" italic True
 
 
     textbutton "Exit Editor" action Return() align (1.0, 0.0) offset (-10, -10)
