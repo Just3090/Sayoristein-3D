@@ -878,6 +878,13 @@ screen animation_editor():
                             padding (10, 5)
                             text_color ("#0F0" if renderer.builder_mode else "#AAA")
                             text_hover_color "#FFF"
+                        
+                        textbutton "Show Bones":
+                            action [ToggleField(renderer, "show_bones"), SetField(renderer, "selection_texture", None)]
+                            background Solid("#0008")
+                            padding (10, 5)
+                            text_color ("#0FF" if renderer.show_bones else "#AAA")
+                            text_hover_color "#FFF"
 
             # Bottom Toolbar
             frame:

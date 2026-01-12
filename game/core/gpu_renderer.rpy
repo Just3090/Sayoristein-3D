@@ -900,12 +900,19 @@ init -10 python:
             vec2 cellUV_sel = (vec2(float(mapPos.x), float(mapPos.y)) + 0.5) * u_map_tex_pixel_size;
             int layer_idx_sel = mapPos.z - int(u_map_layer_base_y);
             vec2 mapUV_sel = vec2(cellUV_sel.x, cellUV_sel.y + float(layer_idx_sel) * u_map_layer_norm_height);
-            if (texture2D(u_selection_texture, mapUV_sel).r > 0.5) {
+            vec4 selData = texture2D(u_selection_texture, mapUV_sel);
+            
+            if (selData.r > 0.5) {
                 is_selected = true;
             }
 
             if (is_selected) {
                 color = mix(color, vec3(1.0, 0.5, 0.0), 0.4);
+            }
+            
+            // Bone Highlight (Green Channel)
+            if (selData.g > 0.5) {
+                color = mix(color, vec3(0.0, 1.0, 0.5), 0.5); // Green-Cian for bones
             }
 
             // Pivot Highlight (Cyan)
@@ -2960,7 +2967,8 @@ init -10 python:
             self.current_pivot = (-1.0, -1.0, -1.0) # Pivot point for current selection
             self.selected_group = "None" # Currently active vertex group
             self.selection_map = {} # Map of (x,y,z) is bool
-            self.voxel_groups = {} # Map of "GroupName" -> [(x,y,z), ...]
+            self.voxel_groups = {} # Map of "GroupName" is {voxels, pivot, parent}
+            self.show_bones = True # Visual toggle for skeleton
             self.selection_texture = None
             self.objects_def = objects # List of (x, y, z, filename) 
             
@@ -3756,7 +3764,7 @@ init -10 python:
             return tex
 
         def update_selection_texture(self):
-            """Updates the selection texture based on the selection_map."""
+            """Updates the selection texture based on selection_map and bones."""
             def next_power_of_two(n):
                 if n == 0: return 1
                 return 2**math.ceil(math.log(n, 2))
@@ -3768,6 +3776,7 @@ init -10 python:
             surf = pygame.Surface((w_pot, h_pot), flags=pygame.SRCALPHA, depth=32)
             surf.fill((0,0,0,0))
             
+            # Draw Selection (Red Channel)
             for pos in self.selection_map.keys():
                 mx, my, mz = pos
                 layer_idx = int(mz) - self.min_layer
@@ -3776,6 +3785,30 @@ init -10 python:
                     if 0 <= mx < w_pot and 0 <= (base_y + my) < h_pot:
                         surf.set_at((int(mx), int(base_y + my)), (255, 0, 0, 255))
             
+            # Draw Bones (Green Channel)
+            if self.show_bones:
+                for gname, data in self.voxel_groups.items():
+                    pname = data.get("parent")
+                    if pname and pname in self.voxel_groups:
+                        p1 = data.get("pivot") # [x, y, z]
+                        p2 = self.voxel_groups[pname].get("pivot")
+                        
+                        if p1 and p2 and p1[0] >= 0 and p2[0] >= 0:
+                            # Distance-based interpolation for line points
+                            dist = math.sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2 + (p1[2]-p2[2])**2)
+                            steps = int(dist * 2.0)
+                            for s in range(steps + 1):
+                                t = float(s) / max(1, steps)
+                                lx, ly, lz = p1[0] + (p2[0]-p1[0])*t, p1[1] + (p2[1]-p1[1])*t, p1[2] + (p2[2]-p1[2])*t
+                                
+                                l_idx = int(lz) - self.min_layer
+                                if 0 <= l_idx < self.num_layers:
+                                    by = int(l_idx * layer_h_pixels)
+                                    px, py = int(lx), int(by + ly)
+                                    if 0 <= px < w_pot and 0 <= py < h_pot:
+                                        c = surf.get_at((px, py))
+                                        surf.set_at((px, py), (c[0], 255, 0, 255))
+
             self.selection_texture = renpy.display.draw.load_texture(surf)
 
         def assign_to_group(self, name):
