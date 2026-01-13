@@ -360,6 +360,7 @@ init -10 python:
         uniform int u_num_active_sprites;
         uniform vec4 u_objects[128]; // xyz=pos, w=model_id
         uniform vec4 u_obj_origins[128];
+        uniform vec4 u_obj_rots[128]; // xyz=euler angles (radians), w=unused
         uniform float u_num_objects;
         uniform sampler2D u_model_atlas;
         uniform float u_num_models;
@@ -389,6 +390,19 @@ init -10 python:
             p = fract(p * vec2(123.34, 456.21));
             p += dot(p, p + 45.32);
             return fract(p.x * p.y);
+        }
+
+        mat3 eulerToMat3(vec3 euler) {
+            float cx = cos(euler.x); float sx = sin(euler.x);
+            float cy = cos(euler.y); float sy = sin(euler.y);
+            float cz = cos(euler.z); float sz = sin(euler.z);
+            
+            // GLSL is Column-Major: mat3(col0, col1, col2)
+            mat3 mx = mat3(1, 0, 0,  0, cx, sx,  0, -sx, cx);
+            mat3 my = mat3(cy, 0, -sy,  0, 1, 0,  sy, 0, cy);
+            mat3 mz = mat3(cz, sz, 0,  -sz, cz, 0,  0, 0, 1);
+            
+            return mz * my * mx;
         }
 
         float noise(vec2 p) {
@@ -620,18 +634,33 @@ init -10 python:
             float modelID = u_objects[i].w;
             if (modelID < 0.0) continue;
             
+            // Rotation Logic
+            vec3 euler = u_obj_rots[i].xyz;
+            vec3 lRayPos = rayPos;
+            vec3 lRayDir = rayDir;
+            mat3 rotMat = mat3(1.0);
+            bool rotated = dot(euler, euler) > 0.0001;
+            
+            if (rotated) {
+                rotMat = eulerToMat3(euler);
+                // Rotate space around object center to simulate object rotation
+                vec3 center = objPos + vec3(u_obj_scale * 0.5);
+                lRayPos = center + transpose(rotMat) * (rayPos - center);
+                lRayDir = transpose(rotMat) * rayDir;
+            }
+            
             float tFarBox;
-            float tNearBox = intersectAABB(rayPos, rayDir, objPos, objPos + vec3(u_obj_scale), tFarBox);
+            float tNearBox = intersectAABB(lRayPos, lRayDir, objPos, objPos + vec3(u_obj_scale), tFarBox);
             
             if (tNearBox < tFarBox && tFarBox > 0.0 && tNearBox < objDist) {
                 // Add tiny epsilon to enter the box safely
                 float tStart = max(0.0, tNearBox + 0.0001); 
                 
-                vec3 enterPos = rayPos + rayDir * tStart - objPos;
+                vec3 enterPos = lRayPos + lRayDir * tStart - objPos;
                 
                 float invScale = 16.0 / u_obj_scale;
                 vec3 localPos = enterPos * invScale;
-                vec3 localDir = rayDir; 
+                vec3 localDir = lRayDir; 
                 
                 // Local DDA
                 ivec3 lMapPos = ivec3(floor(localPos));
@@ -694,11 +723,14 @@ init -10 python:
                             objDist = totalDist;
                             objHit = 1;
                             objModelHitID = int(modelID);
+                            hitObjIndex = i;
                             hitObjPos = objPos;
                             
                             if (lSide == 0) objHitNormal = vec3(-float(lStepDir.x), 0.0, 0.0);
                             else if (lSide == 1) objHitNormal = vec3(0.0, -float(lStepDir.y), 0.0);
                             else objHitNormal = vec3(0.0, 0.0, -float(lStepDir.z));
+                            
+                            if (rotated) objHitNormal = rotMat * objHitNormal;
                         }
                 }
             } 
@@ -2371,6 +2403,7 @@ init -10 python:
             # Pass Objects (Voxel Models)
             active_objects = []
             active_origins = []
+            active_rots = [] # Euler angles in radians
             
             # Rig Groups (Dynamic Bone Objects)
             if c.editor_mode:
@@ -2380,7 +2413,10 @@ init -10 python:
                     # Get the virtual model parts for this group
                     parts = c.loaded_models.get(gname, [])
                     
-                    chunk_scale = 16.0 if c.editor_mode else 1.0
+                    # Rotations (Degrees to Radians)
+                    rad_x = math.radians(wt.get('rx', 0.0))
+                    rad_y = math.radians(wt.get('ry', 0.0))
+                    rad_z = math.radians(wt.get('rz', 0.0))
                     
                     for ox, oy, oz, mid in parts:
                         if len(active_objects) >= 128: break
@@ -2392,14 +2428,12 @@ init -10 python:
                         else:
                             pass
 
-                        wx = float(wt['x']) + float(ox) * 16.0
-                        wy = float(wt['y']) + float(oy) * 16.0
-                        wz = float(wt['z']) + float(oz) * 16.0
-                        
                         active_objects.append((wx, wy, wz, float(mid)))
                         
                         # Static Origin
                         active_origins.append((float(ox)*16.0, float(oy)*16.0, float(oz)*16.0, 0.0))
+                        
+                        active_rots.append((rad_x, rad_y, rad_z, 0.0))
 
             # Scene Objects (Standard Decoration)
             source_objects = getattr(c, 'scene_objects', [])
@@ -2408,6 +2442,11 @@ init -10 python:
                     if len(active_objects) >= 128: break
                     if not getattr(obj, 'visible', True): continue
                     parts = getattr(obj, 'model_parts', [])
+                    
+                    rad_x = math.radians(getattr(obj, 'rot_x', 0.0))
+                    rad_y = math.radians(getattr(obj, 'rot_y', 0.0))
+                    rad_z = math.radians(getattr(obj, 'rot_z', 0.0))
+                    
                     for ox, oy, oz, mid in parts:
                         if len(active_objects) >= 128: break
                         wx = obj.x + float(ox)
@@ -2415,6 +2454,7 @@ init -10 python:
                         wz = obj.z + float(oz)
                         active_objects.append((wx, wy, wz, float(mid)))
                         active_origins.append((wx*16.0, wy*16.0, wz*16.0, 0.0))
+                        active_rots.append((rad_x, rad_y, rad_z, 0.0))
             
             num_valid_objects = len(active_objects)
             
@@ -2422,13 +2462,12 @@ init -10 python:
             while len(active_objects) < 128:
                 active_objects.append((0.0, 0.0, 0.0, -1.0))
                 active_origins.append((0.0, 0.0, 0.0, 0.0))
+                active_rots.append((0.0, 0.0, 0.0, 0.0))
 
             renderer.add_uniform("u_objects", active_objects)
             renderer.add_uniform("u_obj_origins", active_origins)
+            renderer.add_uniform("u_obj_rots", active_rots)
             renderer.add_uniform("u_num_objects", float(num_valid_objects))
-            
-            c.last_active_objects = active_objects
-            c.last_active_origins = active_origins
 
             if hasattr(c, 'model_atlas'):
                 renderer.add_uniform("u_model_atlas", c.model_atlas)
@@ -2735,6 +2774,23 @@ init -10 python:
             
             return (lx, ly, lz)
 
+        def get_group_world_rotation(self, gname):
+            """Calculates the accumulated world rotation for a bone."""
+            if not self.anim_data or "tracks" not in self.anim_data:
+                return (0.0, 0.0, 0.0)
+            
+            lrx = get_anim_value_at_time(self.anim_data, f"group:{gname}:rx", self.current_time, 0.0)
+            lry = get_anim_value_at_time(self.anim_data, f"group:{gname}:ry", self.current_time, 0.0)
+            lrz = get_anim_value_at_time(self.anim_data, f"group:{gname}:rz", self.current_time, 0.0)
+            
+            parent_name = self.rig_data.get(gname, {}).get("parent")
+            
+            if parent_name and parent_name in self.rig_data:
+                prx, pry, prz = self.get_group_world_rotation(parent_name)
+                return (lrx + prx, lry + pry, lrz + prz)
+            
+            return (lrx, lry, lrz)
+
         def update(self, dt):
             if not self.is_playing or not self.anim_data:
                 self.reset_offsets()
@@ -2930,14 +2986,14 @@ init -10 python:
             
             # Animation
             # DEBUG: Force play walking to test bones
-            if not self.anim_controller.is_playing:
-                self.anim_controller.play(self.anim_walk, loop=True)
+            # if not self.anim_controller.is_playing:
+            #    self.anim_controller.play(self.anim_walk, loop=True)
             
-            # if is_moving:
-            #     if not self.anim_controller.is_playing or self.anim_controller.anim_name == self.anim_walk:
-            #         if self.anim_controller.anim_name != self.anim_walk: self.anim_controller.play(self.anim_walk, loop=True)
-            # else:
-            #     if self.anim_controller.is_playing and self.anim_controller.anim_name == self.anim_walk: self.anim_controller.stop()
+            if is_moving:
+                if not self.anim_controller.is_playing or self.anim_controller.anim_name == self.anim_walk:
+                    if self.anim_controller.anim_name != self.anim_walk: self.anim_controller.play(self.anim_walk, loop=True)
+            else:
+                if self.anim_controller.is_playing and self.anim_controller.anim_name == self.anim_walk: self.anim_controller.stop()
 
             self.anim_controller.update(dt)
             
@@ -2956,8 +3012,18 @@ init -10 python:
                     sobj.x = bx + (ox / 16.0)
                     sobj.y = by + (oy / 16.0)
                     sobj.z = bz + (oz / 16.0)
+                    
+                    # if gname == "body":
+                    #     # print(f"DEBUG POS: EntityX={self.x:.2f} BoneX={sobj.x:.2f}")
+                    #     pass
+
                     # Sync rotation/scale
-                    sobj.rot_z = self.anim_controller.orz # Simplified
+                    grx, gry, grz = self.anim_controller.get_group_world_rotation(gname)
+                    
+                    sobj.rot_x = grx + self.anim_controller.orx
+                    sobj.rot_y = gry + self.anim_controller.ory
+                    sobj.rot_z = grz + self.anim_controller.orz
+                    
                     sobj.scale_x = self.anim_controller.osx
 
     class VoxelSniper(VoxelEntity):
@@ -3056,6 +3122,9 @@ init -10 python:
             self.map_data = worldMap
             self.worldMap = worldMap
             self.editor_mode = editor_mode 
+            self.is_arena_mode = getattr(renpy.store, 'is_arena_mode', False)
+            # print(f"DEBUG INIT: GPURenpystein initialized. Arena Mode: {self.is_arena_mode}")
+            
             self.editor_target = None # For Editor Inverse Camera logic
             self.highlight_pos = (-1.0, -1.0, -1.0) # Voxel selection coordinates
             self.current_pivot = (-1.0, -1.0, -1.0) # Pivot point for current selection
@@ -4009,7 +4078,7 @@ init -10 python:
         def get_group_accumulated_transform(self, gname):
             """Recursively calculates the world transform for a group based on its parents."""
             if gname not in self.voxel_groups:
-                return {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}
+                return {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rx': 0.0, 'ry': 0.0, 'rz': 0.0}
             
             gdata = self.voxel_groups[gname]
             local_t = self.editor_target.get_group_data(gname)
@@ -4022,6 +4091,8 @@ init -10 python:
                     'x': pt['x'] + local_t.get('x', 0.0),
                     'y': pt['y'] + local_t.get('y', 0.0),
                     'z': pt['z'] + local_t.get('z', 0.0),
+                    'rx': pt.get('rx', 0.0) + local_t.get('rx', 0.0),
+                    'ry': pt.get('ry', 0.0) + local_t.get('ry', 0.0),
                     'rz': pt.get('rz', 0.0) + local_t.get('rz', 0.0)
                 }
             
@@ -4029,6 +4100,8 @@ init -10 python:
                 'x': local_t.get('x', 0.0),
                 'y': local_t.get('y', 0.0),
                 'z': local_t.get('z', 0.0),
+                'rx': local_t.get('rx', 0.0),
+                'ry': local_t.get('ry', 0.0),
                 'rz': local_t.get('rz', 0.0)
             }
 

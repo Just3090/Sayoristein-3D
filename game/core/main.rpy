@@ -1203,7 +1203,7 @@ screen animation_editor():
                                                 hbox:
                                                     text "[fld!u]: " color "#AAA" yalign 0.5 size 12
                                                     if editing_field == fld:
-                                                        input value FloatInputValue(renderer.editor_target, fld) length 6 color "#FFF" pixel_width 40 action SetScreenVariable("editing_field", None)
+                                                        input value FloatInputValue(renderer.editor_target, fld) length 12 color "#FFF" pixel_width 80 action SetScreenVariable("editing_field", None)
                                                     else:
                                                         textbutton "[getattr(renderer.editor_target, fld):.2f]" action SetScreenVariable("editing_field", fld) text_color "#FFF" text_size 12
                                         vbox:
@@ -1213,7 +1213,7 @@ screen animation_editor():
                                                 hbox:
                                                     text "[fld!u]:" color "#AAA" yalign 0.5 size 12
                                                     if editing_field == fld:
-                                                        input value FloatInputValue(renderer.editor_target, fld) length 6 color "#FFF" pixel_width 40 action SetScreenVariable("editing_field", None)
+                                                        input value FloatInputValue(renderer.editor_target, fld) length 12 color "#FFF" pixel_width 80 action SetScreenVariable("editing_field", None)
                                                     else:
                                                         textbutton "[getattr(renderer.editor_target, fld):.1f]" action SetScreenVariable("editing_field", fld) text_color "#FFF" text_size 12
                                     
@@ -1252,7 +1252,7 @@ screen animation_editor():
                                                 hbox:
                                                     text "[fld!u]: " color "#AAA" yalign 0.5 size 12
                                                     if editing_field == fld:
-                                                        input value GroupFloatInputValue(renderer.editor_target, active_gname, fld) length 6 color "#FFF" pixel_width 40 action SetScreenVariable("editing_field", None)
+                                                        input value GroupFloatInputValue(renderer.editor_target, active_gname, fld) length 12 color "#FFF" pixel_width 80 action SetScreenVariable("editing_field", None)
                                                     else:
                                                         textbutton "[gdata_obj.get(fld, 0.0):.2f]" action SetScreenVariable("editing_field", fld) text_color "#FFF" text_size 12
                                         vbox:
@@ -1262,7 +1262,7 @@ screen animation_editor():
                                                 hbox:
                                                     text "[fld!u]:" color "#AAA" yalign 0.5 size 12
                                                     if editing_field == fld:
-                                                        input value GroupFloatInputValue(renderer.editor_target, active_gname, fld) length 6 color "#FFF" pixel_width 40 action SetScreenVariable("editing_field", None)
+                                                        input value GroupFloatInputValue(renderer.editor_target, active_gname, fld) length 12 color "#FFF" pixel_width 80 action SetScreenVariable("editing_field", None)
                                                     else:
                                                         textbutton "[gdata_obj.get(fld, 0.0):.1f]" action SetScreenVariable("editing_field", fld) text_color "#FFF" text_size 12
                                     
