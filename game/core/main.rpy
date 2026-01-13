@@ -425,7 +425,7 @@ init python:
     # --- Level 1 Data ---
     level1_data = {
         "lighting": "day",
-        "worldMap": load_level_json("template_16.json"),
+        "worldMap": load_level_json("template_16x16x32.json"),
         "player_x": 5.5, "player_y": 4.5,
         "player_dirx": -1.0, "player_diry": 0.0,
         "player_planex": 0.0, "player_planey": 0.66,
@@ -711,16 +711,25 @@ screen stein:
         else: # Bro, can you see?
             internal_width = 142
             internal_height = 80
+        
+        renderer_instance = GPURenpystein(
+            1280, 720,
+            worldMap=worldMap,
+            exits=exits,
+            objects=stein_objects,
+            internal_width=internal_width,
+            internal_height=internal_height,
+            lighting_preset=stein_current_lighting
+        )
 
-    add GPURenpystein(
-        1280, 720,
-        worldMap=worldMap,
-        exits=exits,
-        objects=stein_objects,
-        internal_width=internal_width,
-        internal_height=internal_height,
-        lighting_preset=stein_current_lighting
-    )
+    add renderer_instance
+    
+    # Compass Overlay
+    if config.developer:
+        add "pics/compass.webp":
+            zoom 1.0
+            align (0.02, 0.95)
+            at compass_rot(renderer_instance)
 
 label renpystein_game:
     hide black
@@ -808,6 +817,19 @@ label test_gpu:
     $ reset_stein_state(level=1)
     call screen gpu_stein_test
     return
+
+init python:
+    def compass_updater(renderer):
+        def _update(trans, st, at):
+            if renderer and renderer.player:
+                # East (X+) is North. Angle 0 radians = 0 degrees rotation.
+                trans.rotate = -math.degrees(renderer.player.rot)
+            return 0.01
+        return _update
+
+transform compass_rot(r):
+    rotate_pad True
+    function compass_updater(r)
 
 screen animation_editor():
     # Variables for layout
@@ -897,6 +919,12 @@ screen animation_editor():
                             padding (10, 5)
                             text_color ("#0FF" if renderer.show_bones else "#AAA")
                             text_hover_color "#FFF"
+                    
+                    # Compass
+                    add "pics/compass.webp":
+                        zoom 1.0
+                        align (0.02, 0.95)
+                        at compass_rot(renderer)
 
             # Bottom Toolbar
             frame:
