@@ -3700,7 +3700,8 @@ init -10 python:
                     for (cx, cy, cz), chunk_grid in model_chunks.items():
                         atlas_id = len(all_chunks)
                         all_chunks.append(chunk_grid)
-                        self.loaded_models[filename].append((cx*16, cy*16, cz*16, atlas_id))
+                        # Use float coordinates (1 chunk = 1.0 unit)
+                        self.loaded_models[filename].append((float(cx), float(cy), float(cz), atlas_id))
 
             # Load Rig Groups as Virtual Models (Editor & In-Game)
             rigs_to_process = getattr(self, 'pending_rigs', {})
@@ -3731,8 +3732,8 @@ init -10 python:
                 for (cx, cy, cz), chunk_grid in model_chunks.items():
                     atlas_id = len(all_chunks)
                     all_chunks.append(chunk_grid)
-                    self.loaded_models[gname].append((cx*16, cy*16, cz*16, atlas_id))
-
+                    # Use float coordinates (1 chunk = 1.0 unit)
+                    self.loaded_models[gname].append((float(cx), float(cy), float(cz), atlas_id))
             # Setup Atlas Surface
             num_total_chunks = len(all_chunks)
             if num_total_chunks == 0:
