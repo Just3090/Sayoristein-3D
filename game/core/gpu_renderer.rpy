@@ -2635,15 +2635,14 @@ init -10 python:
             self.owner = owner
             self.anim_data = None
             self.anim_name = None
+            self.rig_data = {} # Hierarchical bone data
             self.current_time = 0.0
             self.is_playing = False
             self.loop = False
             self.duration = 0.0
-            # Position Offsets
+            # Global Offsets
             self.ox = 0.0; self.oy = 0.0; self.oz = 0.0
-            # Rotation Offsets (Degrees)
             self.orx = 0.0; self.ory = 0.0; self.orz = 0.0
-            # Scale Offsets
             self.osx = 1.0; self.osy = 1.0; self.osz = 1.0
 
         def play(self, anim_name, loop=True):
@@ -2652,6 +2651,12 @@ init -10 python:
                 if data:
                     self.anim_data = data
                     self.anim_name = anim_name
+                    
+                    # Merge rig data (don't overwrite if missing in new anim)
+                    new_rig = data.get("voxel_groups", {})
+                    if new_rig:
+                        self.rig_data.update(new_rig)
+                        
                     self.current_time = 0.0
                     self.duration = float(data['meta'].get('duration', 1.0))
                     self.loop = loop 
@@ -2670,6 +2675,25 @@ init -10 python:
             self.anim_name = None
             self.reset_offsets()
 
+        def get_group_world_offset(self, gname):
+            """Calculates the accumulated world offset for a bone in an animation."""
+            if not self.anim_data or "tracks" not in self.anim_data:
+                return (0.0, 0.0, 0.0)
+            
+            # Get local offsets for this group
+            lx = get_anim_value_at_time(self.anim_data, f"group:{gname}:x", self.current_time, 0.0)
+            ly = get_anim_value_at_time(self.anim_data, f"group:{gname}:y", self.current_time, 0.0)
+            lz = get_anim_value_at_time(self.anim_data, f"group:{gname}:z", self.current_time, 0.0)
+            
+            # Add Parent Offsets (Recursively from the stored rig data)
+            parent_name = self.rig_data.get(gname, {}).get("parent")
+            
+            if parent_name and parent_name in self.rig_data:
+                px, py, pz = self.get_group_world_offset(parent_name)
+                return (lx + px, ly + py, lz + pz)
+            
+            return (lx, ly, lz)
+
         def update(self, dt):
             if not self.is_playing or not self.anim_data:
                 self.reset_offsets()
@@ -2684,7 +2708,7 @@ init -10 python:
                     self.current_time = self.duration
                     self.is_playing = False
             
-            # Apply all tracks
+            # Global Entity Offsets
             self.ox = get_anim_value_at_time(self.anim_data, "x", self.current_time, 0.0)
             self.oy = get_anim_value_at_time(self.anim_data, "y", self.current_time, 0.0)
             self.oz = get_anim_value_at_time(self.anim_data, "z", self.current_time, 0.0)
@@ -2749,22 +2773,49 @@ init -10 python:
             self.max_x = 1.0; self.max_y = 1.0; self.max_z = 1.0
             
             if parts:
-                xs = [p[0] for p in parts]
-                ys = [p[1] for p in parts]
-                zs = [p[2] for p in parts]
-                self.min_x = min(xs)
-                self.min_y = min(ys)
-                self.min_z = min(zs)
-                self.max_x = max(xs) + 1.0
-                self.max_y = max(ys) + 1.0
-                self.max_z = max(zs) + 1.0
+                xs = [p[0] for p in parts]; ys = [p[1] for p in parts]; zs = [p[2] for p in parts]
+                self.min_x = min(xs); self.min_y = min(ys); self.min_z = min(zs)
+                self.max_x = max(xs) + 1.0; self.max_y = max(ys) + 1.0; self.max_z = max(zs) + 1.0
             
             # Animation
             self.anim_controller = AnimationController(self)
             
-            # Visual
+            # Rig init
+            self.bone_visuals = {} # Map of BoneName is SceneObject
+            self.voxel_groups = {}
+            
+            # Scan animations for rig definitions
+            potential_anims = [self.anim_walk, self.anim_shoot]
+            for anim_name in potential_anims:
+                anim_data = renpy.store.load_anim_json(anim_name + ".json")
+                if anim_data and "voxel_groups" in anim_data:
+                    # Found a rig!
+                    self.voxel_groups.update(anim_data["voxel_groups"])
+            
+            # Pass the complete rig definition to the controller
+            if self.voxel_groups:
+                print(f"DEBUG: VoxelEntity Init - Voxel Groups Found: {list(self.voxel_groups.keys())}")
+                self.anim_controller.rig_data = self.voxel_groups.copy()
+                
+                for gname in self.voxel_groups.keys():
+                    # Look for our unique model key: "filename:gname"
+                    unique_key = f"{self.filename}:{gname}"
+                    g_parts = wm.loaded_models.get(unique_key, [])
+                    print(f"DEBUG: Looking for key '{unique_key}' -> Found parts: {len(g_parts)}")
+                    
+                    if g_parts:
+                        sobj = SceneObject(x, y, z, gname, model_parts=g_parts)
+                        self.bone_visuals[gname] = sobj
+                        wm.scene_objects.append(sobj)
+            
+            # Base Visual (Only if no rig or for static parts)
             self.visual = SceneObject(x, y, z, filename, model_parts=parts)
-            wm.scene_objects.append(self.visual)
+            if not self.bone_visuals:
+                wm.scene_objects.append(self.visual)
+            else:
+                # If rigged, the base model is hidden or only shows non-grouped voxels
+                # (For now, we hide it and rely on bone visuals)
+                self.visual.visible = False
 
         def get_world_aabb(self):
             return (
@@ -2796,99 +2847,77 @@ init -10 python:
             dist = math.sqrt(dir_x**2 + dir_y**2)
             
             if dist > 0:
-                dir_x /= dist
-                dir_y /= dist
+                dir_x /= dist; dir_y /= dist
             
-            self.wm.spawn_projectile(
-                self.x, self.y, self.z + 0.8, 
-                dir_x, dir_y, 0.0,
-                12.0, 
-                self.bullet_texture_index, 
-                self.damage, 
-                False
-            )
+            self.wm.spawn_projectile(self.x, self.y, self.z + 0.8, dir_x, dir_y, 0.0, 12.0, self.bullet_texture_index, self.damage, False)
             renpy.sound.play("sounds/e-gunshot.ogg", channel="audio")
-            
-            # Play recoil animation using the configured name
             self.anim_controller.play(self.anim_shoot, loop=False)
 
         def take_damage(self, amount):
             self.health -= amount
-            if self.health <= 0:
-                self.die()
-                return True
+            if self.health <= 0: self.die()
             return True
 
         def die(self):
             if not self.dead:
                 self.dead = True
-                if self.visual in self.wm.scene_objects:
-                    self.wm.scene_objects.remove(self.visual)
+                if self.visual in self.wm.scene_objects: self.wm.scene_objects.remove(self.visual)
+                for sobj in self.bone_visuals.values():
+                    if sobj in self.wm.scene_objects: self.wm.scene_objects.remove(sobj)
 
         def update(self, dt, player):
             if self.dead: return
             self.attack_timer = max(0, self.attack_timer - dt)
-            
-            dx = player.x - self.x
-            dy = player.y - self.y
+            dx = player.x - self.x; dy = player.y - self.y
             dist = math.sqrt(dx*dx + dy*dy)
             
-            # Vision and Attack logic
-            if dist < self.attack_range:
-                if self.has_line_of_sight(player.x, player.y):
-                    if self.attack_timer <= 0:
-                        self.attack(player)
+            # Vision and Attack
+            if dist < self.attack_range and self.has_line_of_sight(player.x, player.y):
+                if self.attack_timer <= 0: self.attack(player)
             
-            # Movement logic (AI)
+            # Movement
             is_moving = False
             if dist > 2.0 and dist < 25.0:
                 speed = self.move_speed * dt
-                
-                # Collision Logic
                 try:
                     map_addr, _ = self.wm.flat_map_buffer.buffer_info()
-                    nx, ny = SteinWrapper.resolve_movement(
-                        self.x, self.y, self.z,
-                        (dx / dist) * speed, (dy / dist) * speed,
-                        0.4, # Enemy Radius
-                        map_addr,
-                        self.wm.mapWidth, self.wm.mapHeight, self.wm.num_layers, self.wm.min_layer
-                    )
-                    self.x = nx
-                    self.y = ny
+                    nx, ny = SteinWrapper.resolve_movement(self.x, self.y, self.z, (dx/dist)*speed, (dy/dist)*speed, 0.4, map_addr, self.wm.mapWidth, self.wm.mapHeight, self.wm.num_layers, self.wm.min_layer)
+                    self.x, self.y = nx, ny
                     is_moving = True
                 except:
-                    self.x += (dx / dist) * speed
-                    self.y += (dy / dist) * speed
-                    is_moving = True
+                    self.x += (dx/dist)*speed; self.y += (dy/dist)*speed; is_moving = True
             
-            # Animation Controller Update
-            # Auto-play walking animation if moving
-            if is_moving:
-                # Don't override special animations like recoil unless they are finished
-                if not self.anim_controller.is_playing or self.anim_controller.anim_name == self.anim_walk:
-                    if self.anim_controller.anim_name != self.anim_walk:
-                        self.anim_controller.play(self.anim_walk, loop=True)
-            else:
-                # Stop walking if idle
-                if self.anim_controller.is_playing and self.anim_controller.anim_name == self.anim_walk:
-                    self.anim_controller.stop()
+            # Animation
+            # DEBUG: Force play walking to test bones
+            if not self.anim_controller.is_playing:
+                self.anim_controller.play(self.anim_walk, loop=True)
+            
+            # if is_moving:
+            #     if not self.anim_controller.is_playing or self.anim_controller.anim_name == self.anim_walk:
+            #         if self.anim_controller.anim_name != self.anim_walk: self.anim_controller.play(self.anim_walk, loop=True)
+            # else:
+            #     if self.anim_controller.is_playing and self.anim_controller.anim_name == self.anim_walk: self.anim_controller.stop()
 
             self.anim_controller.update(dt)
             
-            # Sync visual (logic position + animation offset)
-            self.visual.x = self.x + self.anim_controller.ox
-            self.visual.y = self.y + self.anim_controller.oy
-            self.visual.z = self.z + self.anim_controller.oz
+            # Sync visuals (logic position + animation offset)
+            # Global Body Pos
+            bx, by, bz = self.x + self.anim_controller.ox, self.y + self.anim_controller.oy, self.z + self.anim_controller.oz
             
-            # Sync Rotation and Scale (for future shader support)
-            self.visual.rot_x = self.anim_controller.orx
-            self.visual.rot_y = self.anim_controller.ory
-            self.visual.rot_z = self.anim_controller.orz
-            
-            self.visual.scale_x = self.anim_controller.osx
-            self.visual.scale_y = self.anim_controller.osy
-            self.visual.scale_z = self.anim_controller.osz
+            if not self.bone_visuals:
+                self.visual.x, self.visual.y, self.visual.z = bx, by, bz
+            else:
+                # Update each bone
+                for gname, sobj in self.bone_visuals.items():
+                    # Get hierarchical world offset from animation (in voxel units)
+                    ox, oy, oz = self.anim_controller.get_group_world_offset(gname)
+                    # Convert to world scale (1:16)
+                    sobj.x = bx + (ox / 16.0)
+                    sobj.y = by + (oy / 16.0)
+                    sobj.z = bz + (oz / 16.0)
+                    # Sync rotation/scale
+                    sobj.rot_z = self.anim_controller.orz # Simplified
+                    sobj.scale_x = self.anim_controller.osx
 
     class VoxelSniper(VoxelEntity):
         def __init__(self, wm, x, y, z, filename=MODEL_VOXEL_SNIPER, health=80):
@@ -3064,31 +3093,70 @@ init -10 python:
             
             # Prepare objects list for atlas generation (models)
             atlas_objects = list(objects)
+            self.pending_rigs = {}
 
-            # Pre-scan enemies to include their models in atlas generation
+            # Pre-scan enemies to include their models and rig chunks in atlas generation
             if hasattr(renpy.store, 'stein_enemies'):
                 for e_data in renpy.store.stein_enemies:
                     type_id = e_data[5] if len(e_data) > 5 else 0
-                    # Voxel Enemies range (100+)
+                    
                     if type_id >= 100:
-                        filename = e_data[2] if len(e_data) > 2 else ""
-                        if filename:
-                            # Add dummy object entry so create_model_atlas loads the file
-                            atlas_objects.append((0,0,0, filename))
+                        model_file = e_data[2] if len(e_data) > 2 else ""
+                        if model_file:
+                            atlas_objects.append((0,0,0, model_file))
+                            
+                            # Check for Rigs in default animations
+                            # Logic: Find the walk_anim name for this type
+                            w_anim = renpy.store.ANIM_VOXEL_WALK
+                            if type_id == renpy.store.ENEMY_TYPE_VOXEL_SNIPER: w_anim = renpy.store.ANIM_VOXEL_SNIPER_WALK
+                            elif type_id == renpy.store.ENEMY_TYPE_VOXEL_ELITE: w_anim = renpy.store.ANIM_VOXEL_ELITE_WALK
+                            elif type_id == renpy.store.ENEMY_TYPE_VOXEL_YURITLER: w_anim = renpy.store.ANIM_VOXEL_YURITLER_WALK
+                            
+                            a_data = renpy.store.load_anim_json(w_anim + ".json")
+                            if a_data and "voxel_groups" in a_data:
+                                # Need model data for texture ID lookup
+                                m_data = renpy.store.load_object_json(model_file)
+                                id_map = {}
+                                if m_data:
+                                    for mz, grid in m_data.items():
+                                        for mx, row in enumerate(grid):
+                                            for my, tid in enumerate(row):
+                                                if tid > 0: id_map[(int(mx), int(my), int(mz))] = int(tid)
+                                
+                                for gname, gdata in a_data["voxel_groups"].items():
+                                    # Create a unique key for this bone model in the atlas
+                                    unique_bone_key = f"{model_file}:{gname}"
+                                    print(f"DEBUG PRE-SCAN: Baking rig for {unique_bone_key}")
+                                    self.pending_rigs[unique_bone_key] = {'voxels': gdata.get('voxels', []), 'id_lookup': id_map}
 
             # Pre-load arena models if in Arena Mode
             if self.is_arena_mode:
-                potential_models = [
-                    renpy.store.MODEL_VOXEL_BASIC,
-                    renpy.store.MODEL_VOXEL_SNIPER,
-                    renpy.store.MODEL_VOXEL_ELITE,
-                    renpy.store.MODEL_VOXEL_YURITLER
+                arena_types = [
+                    (renpy.store.MODEL_VOXEL_BASIC, renpy.store.ANIM_VOXEL_WALK),
+                    (renpy.store.MODEL_VOXEL_SNIPER, renpy.store.ANIM_VOXEL_SNIPER_WALK),
+                    (renpy.store.MODEL_VOXEL_ELITE, renpy.store.ANIM_VOXEL_ELITE_WALK),
+                    (renpy.store.MODEL_VOXEL_YURITLER, renpy.store.ANIM_VOXEL_YURITLER_WALK)
                 ]
-                # Filter None or empty
-                potential_models = list(set([m for m in potential_models if m]))
                 
-                for m in potential_models:
-                    atlas_objects.append((0,0,0, m))
+                for model_file, anim_file in arena_types:
+                    if not model_file: continue
+                    atlas_objects.append((0,0,0, model_file))
+                    
+                    if anim_file:
+                        a_data = renpy.store.load_anim_json(anim_file + ".json")
+                        if a_data and "voxel_groups" in a_data:
+                            m_data = renpy.store.load_object_json(model_file)
+                            id_map = {}
+                            if m_data:
+                                for mz, grid in m_data.items():
+                                    for mx, row in enumerate(grid):
+                                        for my, tid in enumerate(row):
+                                            if tid > 0: id_map[(int(mx), int(my), int(mz))] = int(tid)
+                            
+                            for gname, gdata in a_data["voxel_groups"].items():
+                                unique_bone_key = f"{model_file}:{gname}"
+                                # print(f"DEBUG ARENA: Baking {unique_bone_key}")
+                                self.pending_rigs[unique_bone_key] = {'voxels': gdata.get('voxels', []), 'id_lookup': id_map}
 
             self.model_atlas, self.num_models = self.create_model_atlas(atlas_objects)
 
@@ -3634,31 +3702,36 @@ init -10 python:
                         all_chunks.append(chunk_grid)
                         self.loaded_models[filename].append((cx*16, cy*16, cz*16, atlas_id))
 
-            # Load Rig Groups as Virtual Models (Editor Only)
-            if self.editor_mode and getattr(self, 'master_voxels', None):
-                # Pre-build a dict for integer lookup
+            # Load Rig Groups as Virtual Models (Editor & In-Game)
+            rigs_to_process = getattr(self, 'pending_rigs', {})
+            
+            # If in editor mode, we also include current session groups
+            if self.editor_mode and getattr(self, 'voxel_groups', None):
                 id_lookup = {}
-                for v in self.master_voxels:
-                    id_lookup[(int(v[0]), int(v[1]), int(v[2]))] = int(v[3])
+                if hasattr(self, 'master_voxels'):
+                    for v in self.master_voxels: id_lookup[(int(v[0]), int(v[1]), int(v[2]))] = int(v[3])
                 
                 for gname, gdata in self.voxel_groups.items():
-                    model_chunks = {}
-                    for pos in gdata.get('voxels', []):
-                        vx, vy, vz = int(pos[0]), int(pos[1]), int(pos[2])
-                        # Get original ID or fallback to 1 only if absolutely missing
-                        tid = id_lookup.get((vx, vy, vz), 1)
-                        
-                        cx, cy, cz = vx // 16, vy // 16, vz // 16
-                        chunk_key = (cx, cy, cz)
-                        if chunk_key not in model_chunks:
-                            model_chunks[chunk_key] = {z: [[0 for _ in range(16)] for _ in range(16)] for z in range(16)}
-                        model_chunks[chunk_key][vz % 16][vx % 16][vy % 16] = tid
+                    rigs_to_process[gname] = {'voxels': gdata.get('voxels', []), 'id_lookup': id_lookup}
+
+            for gname, rdata in rigs_to_process.items():
+                model_chunks = {}
+                id_lookup = rdata.get('id_lookup', {})
+                for pos in rdata.get('voxels', []):
+                    vx, vy, vz = int(pos[0]), int(pos[1]), int(pos[2])
+                    tid = id_lookup.get((vx, vy, vz), 1)
                     
-                    self.loaded_models[gname] = []
-                    for (cx, cy, cz), chunk_grid in model_chunks.items():
-                        atlas_id = len(all_chunks)
-                        all_chunks.append(chunk_grid)
-                        self.loaded_models[gname].append((cx*16, cy*16, cz*16, atlas_id))
+                    cx, cy, cz = vx // 16, vy // 16, vz // 16
+                    chunk_key = (cx, cy, cz)
+                    if chunk_key not in model_chunks:
+                        model_chunks[chunk_key] = {z: [[0 for _ in range(16)] for _ in range(16)] for z in range(16)}
+                    model_chunks[chunk_key][vz % 16][vx % 16][vy % 16] = tid
+                
+                self.loaded_models[gname] = []
+                for (cx, cy, cz), chunk_grid in model_chunks.items():
+                    atlas_id = len(all_chunks)
+                    all_chunks.append(chunk_grid)
+                    self.loaded_models[gname].append((cx*16, cy*16, cz*16, atlas_id))
 
             # Setup Atlas Surface
             num_total_chunks = len(all_chunks)
@@ -3858,6 +3931,19 @@ init -10 python:
             
             self.current_pivot = tuple(pivot)
             self.selection_texture = None # Force update
+            renpy.restart_interaction()
+
+        def select_all_voxels(self):
+            """Selects ALL voxels in the current model."""
+            if not self.master_voxels: return
+            
+            self.selection_map.clear()
+            for v in self.master_voxels:
+                # v is (x, y, z, id)
+                self.selection_map[(int(v[0]), int(v[1]), int(v[2]))] = True
+            
+            self.selection_texture = None
+            renpy.notify(f"Selected all {len(self.master_voxels)} voxels")
             renpy.restart_interaction()
 
         def set_group_pivot(self, name):

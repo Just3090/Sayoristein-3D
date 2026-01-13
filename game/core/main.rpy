@@ -1094,6 +1094,10 @@ screen animation_editor():
                         text "[sel_count]" size 14 color "#0F0"
                         
                         null width 10
+                        textbutton "All":
+                            action Function(renderer.select_all_voxels)
+                            text_size 14 text_color "#8AF"
+
                         textbutton "Clear":
                             action [
                                 Function(renderer.selection_map.clear),

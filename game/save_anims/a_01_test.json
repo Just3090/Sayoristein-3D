@@ -10,31 +10,11 @@
                 "time": 0.0,
                 "value": 0.0,
                 "easing": "linear"
-            },
-            {
-                "time": 1.0034013605442176,
-                "value": 5.0,
-                "easing": "linear"
-            },
-            {
-                "time": 1.989795918367347,
-                "value": 0.0,
-                "easing": "linear"
             }
         ],
         "y": [
             {
                 "time": 0.0,
-                "value": 0.0,
-                "easing": "linear"
-            },
-            {
-                "time": 1.0034013605442176,
-                "value": 5.0,
-                "easing": "linear"
-            },
-            {
-                "time": 1.989795918367347,
                 "value": 0.0,
                 "easing": "linear"
             }
@@ -44,17 +24,117 @@
                 "time": 0.0,
                 "value": 0.0,
                 "easing": "linear"
-            },
+            }
+        ],
+        "group:test:x": [
             {
-                "time": 1.0034013605442176,
-                "value": 0.0,
-                "easing": "linear"
-            },
-            {
-                "time": 1.989795918367347,
+                "time": 1.0,
                 "value": 0.0,
                 "easing": "linear"
             }
+        ],
+        "group:test:y": [
+            {
+                "time": 1.0,
+                "value": 0.0,
+                "easing": "linear"
+            }
+        ],
+        "group:test:z": [
+            {
+                "time": 1.0,
+                "value": 2.0,
+                "easing": "linear"
+            }
+        ],
+        "group:test:rx": [
+            {
+                "time": 1.0,
+                "value": 0.0,
+                "easing": "linear"
+            }
+        ],
+        "group:test:ry": [
+            {
+                "time": 1.0,
+                "value": 0.0,
+                "easing": "linear"
+            }
+        ],
+        "group:test:rz": [
+            {
+                "time": 1.0,
+                "value": 0.0,
+                "easing": "linear"
+            }
+        ],
+        "group:test:sx": [
+            {
+                "time": 1.0,
+                "value": 1.0,
+                "easing": "linear"
+            }
+        ],
+        "group:test:sy": [
+            {
+                "time": 1.0,
+                "value": 1.0,
+                "easing": "linear"
+            }
+        ],
+        "group:test:sz": [
+            {
+                "time": 1.0,
+                "value": 1.0,
+                "easing": "linear"
+            }
         ]
+    },
+    "voxel_groups": {
+        "test": {
+            "voxels": [
+                [
+                    6,
+                    6,
+                    1
+                ],
+                [
+                    5,
+                    5,
+                    1
+                ],
+                [
+                    4,
+                    4,
+                    1
+                ],
+                [
+                    3,
+                    3,
+                    1
+                ],
+                [
+                    2,
+                    2,
+                    1
+                ],
+                [
+                    1,
+                    1,
+                    1
+                ],
+                [
+                    0,
+                    0,
+                    1
+                ]
+            ],
+            "pivot": [
+                6.0,
+                6.0,
+                1.0
+            ],
+            "parent": null
+        }
     }
 }
