@@ -4417,6 +4417,9 @@ init -10 python:
                                 
                                 ve.take_damage(p.damage)
                                 break
+                
+                # Remove dead voxel entities from the active list
+                self.voxel_entities = [ve for ve in self.voxel_entities if not ve.dead]
 
             dead_enemies = set()
 
