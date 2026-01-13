@@ -359,6 +359,7 @@ init -10 python:
         uniform vec4 u_sprites[64]; // x, y, texture_id, pitch_offset
         uniform int u_num_active_sprites;
         uniform vec4 u_objects[128]; // xyz=pos, w=model_id
+        uniform vec4 u_obj_origins[128];
         uniform float u_num_objects;
         uniform sampler2D u_model_atlas;
         uniform float u_num_models;
@@ -607,6 +608,7 @@ init -10 python:
         
         int objHit = 0;
         int objModelHitID = -1;
+        int hitObjIndex = -1;
         vec3 objHitNormal = vec3(0.0);
         vec3 hitObjPos = vec3(0.0); 
         int objVoxelID = 0;
@@ -717,21 +719,23 @@ init -10 python:
             vec2 texUV;
             
             if (hit == 3) {
-                vec3 localHit = (hitPos - hitObjPos) * 16.0;
+                vec3 hitLocal = (hitPos - hitObjPos) * (16.0 / u_obj_scale);
+                vec3 inVoxel = hitLocal - floor(hitLocal); // 0..1 inside voxel
+                
                 if (abs(hitNormal.x) > 0.5) { 
-                    float wallX = localHit.y;
-                    if (hitNormal.x > 0.0) wallX = localHit.y; 
-                    else wallX = 1.0 - localHit.y;
-                    texUV = vec2(fract(wallX), fract(1.0 - localHit.z));
+                    float wallX = inVoxel.y;
+                    if (hitNormal.x > 0.0) wallX = inVoxel.y; 
+                    else wallX = 1.0 - inVoxel.y;
+                    texUV = vec2(wallX, 1.0 - inVoxel.z);
                 }
                 else if (abs(hitNormal.y) > 0.5) { 
-                    float wallX = localHit.x;
-                    if (hitNormal.y > 0.0) wallX = 1.0 - localHit.x;
-                    else wallX = localHit.x;
-                    texUV = vec2(fract(wallX), fract(1.0 - localHit.z));
+                    float wallX = inVoxel.x;
+                    if (hitNormal.y > 0.0) wallX = 1.0 - inVoxel.x;
+                    else wallX = inVoxel.x;
+                    texUV = vec2(wallX, 1.0 - inVoxel.z);
                 }
                 else { 
-                    texUV = vec2(fract(localHit.x), fract(localHit.y));
+                    texUV = vec2(inVoxel.x, inVoxel.y);
                 }
             } else {
                 if (side == 0) { // X-Side
@@ -892,32 +896,50 @@ init -10 python:
             
             color = finalColor * totalLight * faceShadow;
 
-            // Highlight Voxel (Editor Selection)
-            // Single highlight pos (cursor)
-            bool is_selected = (distance(vec3(mapPos), u_highlight_pos) < 0.1);
+            bool is_selected = false;
             
-            // Multi-selection map
-            vec2 cellUV_sel = (vec2(float(mapPos.x), float(mapPos.y)) + 0.5) * u_map_tex_pixel_size;
-            int layer_idx_sel = mapPos.z - int(u_map_layer_base_y);
-            vec2 mapUV_sel = vec2(cellUV_sel.x, cellUV_sel.y + float(layer_idx_sel) * u_map_layer_norm_height);
-            vec4 selData = texture2D(u_selection_texture, mapUV_sel);
-            
-            if (selData.r > 0.5) {
-                is_selected = true;
+            if (hit == 1) {
+                // Map Voxel Highlight
+                if (distance(vec3(mapPos), u_highlight_pos) < 0.1) is_selected = true;
+                
+                // Multi-selection map check
+                vec2 cellUV_sel = (vec2(float(mapPos.x), float(mapPos.y)) + 0.5) * u_map_tex_pixel_size;
+                int layer_idx_sel = mapPos.z - int(u_map_layer_base_y);
+                vec2 mapUV_sel = vec2(cellUV_sel.x, cellUV_sel.y + float(layer_idx_sel) * u_map_layer_norm_height);
+                vec4 selData = texture2D(u_selection_texture, mapUV_sel);
+                
+                if (selData.r > 0.5) is_selected = true;
+                if (selData.g > 0.5) color = mix(color, vec3(0.0, 1.0, 0.5), 0.5); // Bones
+                if (distance(vec3(mapPos), u_pivot_pos) < 0.1) color = mix(color, vec3(0.0, 1.0, 1.0), 0.6); // Pivot
+            }
+            else if (hit == 3 && hitObjIndex >= 0) {
+                // color = vec3(0.0, 1.0, 0.0); 
+                
+                vec3 hitLocal = (hitPos - hitObjPos) * (16.0 / u_obj_scale);
+                ivec3 finalMapPos = ivec3(floor(hitLocal));
+                vec3 globalPos = u_obj_origins[hitObjIndex].xyz + vec3(finalMapPos);
+                
+                if (distance(globalPos, u_highlight_pos) < 0.1) is_selected = true;
+                
+                int gx = int(globalPos.x); int gy = int(globalPos.y); int gz = int(globalPos.z);
+                
+                if (gx >= 0 && gx < int(u_map_size.x) && gy >= 0 && gy < int(u_map_size.y)) {
+                    vec2 cellUV_sel = (vec2(float(gx), float(gy)) + 0.5) * u_map_tex_pixel_size;
+                    int layer_idx_sel = gz - int(u_map_layer_base_y);
+                    
+                    if (layer_idx_sel >= 0 && layer_idx_sel < int(u_map_layer_count)) {
+                        vec2 mapUV_sel = vec2(cellUV_sel.x, cellUV_sel.y + float(layer_idx_sel) * u_map_layer_norm_height);
+                        vec4 selData = texture2D(u_selection_texture, mapUV_sel);
+                        
+                        if (selData.r > 0.5) is_selected = true;
+                        if (selData.g > 0.5) color = mix(color, vec3(0.0, 1.0, 0.5), 0.5);
+                        if (distance(globalPos, u_pivot_pos) < 0.1) color = mix(color, vec3(0.0, 1.0, 1.0), 0.6);
+                    }
+                }
             }
 
             if (is_selected) {
                 color = mix(color, vec3(1.0, 0.5, 0.0), 0.4);
-            }
-            
-            // Bone Highlight (Green Channel)
-            if (selData.g > 0.5) {
-                color = mix(color, vec3(0.0, 1.0, 0.5), 0.5); // Green-Cian for bones
-            }
-
-            // Pivot Highlight (Cyan)
-            if (distance(vec3(mapPos), u_pivot_pos) < 0.1) {
-                color = mix(color, vec3(0.0, 1.0, 1.0), 0.6);
             }
 
         } else {
@@ -2348,6 +2370,7 @@ init -10 python:
 
             # Pass Objects (Voxel Models)
             active_objects = []
+            active_origins = []
             
             # Rig Groups (Dynamic Bone Objects)
             if c.editor_mode:
@@ -2357,14 +2380,26 @@ init -10 python:
                     # Get the virtual model parts for this group
                     parts = c.loaded_models.get(gname, [])
                     
+                    chunk_scale = 16.0 if c.editor_mode else 1.0
+                    
                     for ox, oy, oz, mid in parts:
                         if len(active_objects) >= 128: break
-                        # Position = Model Base (0,0,0) + Bone Offset + Piece Offset
-                        # NOTE: In Editor, global offset is handled by Camera, so we only apply Bone Offset
-                        wx = float(wt['x']) + float(ox)
-                        wy = float(wt['y']) + float(oy)
-                        wz = float(wt['z']) + float(oz)
+                        # Dynamic Pos
+                        if c.editor_mode:
+                            wx = float(wt['x']) + float(ox) * 16.0
+                            wy = float(wt['y']) + float(oy) * 16.0
+                            wz = float(wt['z']) + float(oz) * 16.0
+                        else:
+                            pass
+
+                        wx = float(wt['x']) + float(ox) * 16.0
+                        wy = float(wt['y']) + float(oy) * 16.0
+                        wz = float(wt['z']) + float(oz) * 16.0
+                        
                         active_objects.append((wx, wy, wz, float(mid)))
+                        
+                        # Static Origin
+                        active_origins.append((float(ox)*16.0, float(oy)*16.0, float(oz)*16.0, 0.0))
 
             # Scene Objects (Standard Decoration)
             source_objects = getattr(c, 'scene_objects', [])
@@ -2379,15 +2414,21 @@ init -10 python:
                         wy = obj.y + float(oy)
                         wz = obj.z + float(oz)
                         active_objects.append((wx, wy, wz, float(mid)))
+                        active_origins.append((wx*16.0, wy*16.0, wz*16.0, 0.0))
             
             num_valid_objects = len(active_objects)
             
             # Pad to 128
             while len(active_objects) < 128:
                 active_objects.append((0.0, 0.0, 0.0, -1.0))
+                active_origins.append((0.0, 0.0, 0.0, 0.0))
 
             renderer.add_uniform("u_objects", active_objects)
+            renderer.add_uniform("u_obj_origins", active_origins)
             renderer.add_uniform("u_num_objects", float(num_valid_objects))
+            
+            c.last_active_objects = active_objects
+            c.last_active_origins = active_origins
 
             if hasattr(c, 'model_atlas'):
                 renderer.add_uniform("u_model_atlas", c.model_atlas)
@@ -4893,6 +4934,54 @@ init -10 python:
             elif ev.type == pygame.FINGERUP:
                 if finger_id in self.active_fingers: del self.active_fingers[finger_id]
 
+        def raycast_objects(self, ro, rd):
+            """Raycasts against cached active objects to find the closest voxel."""
+            objects = getattr(self, 'last_active_objects', [])
+            origins = getattr(self, 'last_active_origins', [])
+            
+            closest_dist = 100.0
+            hit_voxel = None
+            
+            obj_scale = 16.0 if self.editor_mode else 1.0
+            
+            for i, obj in enumerate(objects):
+                if i >= len(origins): break
+                if obj[3] < 0: continue
+                
+                box_min = (obj[0], obj[1], obj[2])
+                box_max = (obj[0]+obj_scale, obj[1]+obj_scale, obj[2]+obj_scale)
+                
+                t_min_x = (box_min[0] - ro[0]) / (rd[0] if abs(rd[0])>1e-5 else 1e-5)
+                t_max_x = (box_max[0] - ro[0]) / (rd[0] if abs(rd[0])>1e-5 else 1e-5)
+                t1 = min(t_min_x, t_max_x); t2 = max(t_min_x, t_max_x)
+                
+                t_min_y = (box_min[1] - ro[1]) / (rd[1] if abs(rd[1])>1e-5 else 1e-5)
+                t_max_y = (box_max[1] - ro[1]) / (rd[1] if abs(rd[1])>1e-5 else 1e-5)
+                t1 = max(t1, min(t_min_y, t_max_y)); t2 = min(t2, max(t_min_y, t_max_y))
+                
+                t_min_z = (box_min[2] - ro[2]) / (rd[2] if abs(rd[2])>1e-5 else 1e-5)
+                t_max_z = (box_max[2] - ro[2]) / (rd[2] if abs(rd[2])>1e-5 else 1e-5)
+                t1 = max(t1, min(t_min_z, t_max_z)); t2 = min(t2, max(t_min_z, t_max_z))
+                
+                if t2 >= t1 and t2 > 0:
+                    dist = t1 if t1 > 0 else 0
+                    if dist < closest_dist:
+                        hit_point = (ro[0] + rd[0]*dist + rd[0]*0.01, ro[1] + rd[1]*dist + rd[1]*0.01, ro[2] + rd[2]*dist + rd[2]*0.01)
+                        
+                        local_x = (hit_point[0] - obj[0]) * (16.0 / obj_scale)
+                        local_y = (hit_point[1] - obj[1]) * (16.0 / obj_scale)
+                        local_z = (hit_point[2] - obj[2]) * (16.0 / obj_scale)
+                        
+                        vx, vy, vz = math.floor(local_x), math.floor(local_y), math.floor(local_z)
+                        
+                        if 0 <= vx < 16 and 0 <= vy < 16 and 0 <= vz < 16:
+                            # Handle vec4 origin unpacking (x, y, z, padding)
+                            ox, oy, oz, _ = origins[i]
+                            hit_voxel = (ox + vx, oy + vy, oz + vz)
+                            closest_dist = dist
+
+            return hit_voxel, closest_dist
+
         def update_player_from_touch_state(self):
             self.touch_speed = 0.0; self.touch_strafe = 0.0; self.touch_dir = 0.0
             for finger_id, info in list(self.active_fingers.items()):
@@ -5028,29 +5117,48 @@ init -10 python:
                         px, py = cx + (rx * c_val - ry * s), cy + (rx * s + ry * c_val)
                         rot -= rz_rad
 
+                    # Map Picking
                     map_addr, _ = self.flat_map_buffer.buffer_info()
                     hit, mx, my, mz, side, sx, sy, sz = SteinWrapper.cast_ray_fast(
                         px, py, 1.6 + pz, math.cos(rot), math.sin(rot), pitch,
                         map_addr, self.mapWidth, self.mapHeight, self.num_layers, self.min_layer, 100.0
                     )
+                    
+                    dist_map = 1000.0
                     if hit:
-                        self.highlight_pos = (float(mx), float(my), float(mz))
+                        dist_map = math.sqrt((mx + 0.5 - px)**2 + (my + 0.5 - py)**2 + (mz + 0.5 - (1.6+pz))**2)
+
+                    # Object Picking
+                    rd_x = math.cos(rot); rd_y = math.sin(rot); rd_z = pitch
+                    l = math.sqrt(rd_x*rd_x + rd_y*rd_y + rd_z*rd_z)
+                    rd = (rd_x/l, rd_y/l, rd_z/l)
+                    
+                    obj_voxel, dist_obj = self.raycast_objects((px, py, 1.6+pz), rd)
+                    
+                    final_voxel = None
+                    if obj_voxel and dist_obj < dist_map:
+                        final_voxel = obj_voxel
+                        print(f"DEBUG PICK: Hit Object Voxel {final_voxel} at dist {dist_obj:.2f}")
+                    elif hit:
+                        final_voxel = (float(mx), float(my), float(mz))
+                        print(f"DEBUG PICK: Hit Map Voxel {final_voxel} at dist {dist_map:.2f}")
+
+                    if final_voxel:
+                        self.highlight_pos = (float(final_voxel[0]), float(final_voxel[1]), float(final_voxel[2]))
                         
                         # Multi-selection toggle
-                        pos = (int(mx), int(my), int(mz))
+                        pos = (int(final_voxel[0]), int(final_voxel[1]), int(final_voxel[2]))
                         if pos in self.selection_map:
                             del self.selection_map[pos]
-                            self.highlight_pos = (-1.0, -1.0, -1.0) # Clear visual highlight on deselect
-                            self.pickup_msg = f"VOXEL DESELECTED: {mx}, {my}, {mz}"
+                            self.highlight_pos = (-1.0, -1.0, -1.0)
+                            self.pickup_msg = f"VOXEL DESELECTED: {pos}"
                         else:
                             self.selection_map[pos] = True
-                            self.highlight_pos = (float(mx), float(my), float(mz))
-                            self.pickup_msg = f"VOXEL SELECTED: {mx}, {my}, {mz}"
+                            self.pickup_msg = f"VOXEL SELECTED: {pos}"
                         
-                        # Force texture update on next render
                         self.selection_texture = None
                         self.pickup_msg_timer = 2.0
-                        renpy.restart_interaction() # Update Sidebar
+                        renpy.restart_interaction()
                     else:
                         self.highlight_pos = (-1.0, -1.0, -1.0)
 
