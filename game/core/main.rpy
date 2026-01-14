@@ -425,7 +425,7 @@ init python:
     # --- Level 1 Data ---
     level1_data = {
         "lighting": "day",
-        "worldMap": load_level_json("template_16x16x32.json"),
+        "worldMap": load_level_json("e_01.json"),
         "player_x": 5.5, "player_y": 4.5,
         "player_dirx": -1.0, "player_diry": 0.0,
         "player_planex": 0.0, "player_planey": 0.66,
