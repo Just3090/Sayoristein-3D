@@ -298,18 +298,33 @@ init -10 python:
         total_size = width * height * num_layers
         
         flat = array.array('i', [0] * total_size)
+        solid_count = 0
         
-        if isinstance(world_map, dict):
+        # Use Duck Typing for RenPy Revertable types
+        if hasattr(world_map, 'items'):
+            # print(f"DEBUG: WorldMap Keys: {list(world_map.keys())}")
             for z, grid in world_map.items():
-                layer_idx = z - min_layer
-                if layer_idx < 0 or layer_idx >= num_layers: continue
+                try:
+                    layer_idx = int(z) - min_layer
+                except:
+                    # print(f"DEBUG: Skipped non-int layer {z}")
+                    continue 
+                
+                if layer_idx < 0 or layer_idx >= num_layers: 
+                    # print(f"DEBUG: Layer {z} out of bounds {layer_idx}/{num_layers}")
+                    continue
                 
                 base_idx = layer_idx * width * height
+                # print(f"DEBUG: Processing Layer {z}. Rows: {len(grid)}")
                 for x in range(min(len(grid), width)):
                     row = grid[x]
+                    # if layer_idx == 0 and x == 0:
+                    #    print(f"DEBUG MAP ROW sample: {row}")
+                    
                     for y in range(min(len(row), height)):
                         if row[y] > 0:
                             flat[base_idx + (x * height) + y] = row[y]
+                            solid_count += 1
                             
         elif isinstance(world_map, list):
             layer_idx = 0 - min_layer
@@ -320,6 +335,7 @@ init -10 python:
                     for y in range(min(len(row), height)):
                         if row[y] > 0:
                             flat[base_idx + (x * height) + y] = row[y]
+                            solid_count += 1
 
         return flat
 
@@ -346,11 +362,12 @@ init -10 python:
         uniform sampler2D u_map_texture;
         uniform sampler2D u_selection_texture;
         uniform vec2 u_map_size;
-        uniform vec2 u_map_uv_scale; 
-        uniform float u_map_layer_norm_height;
         uniform float u_map_layer_base_y;
         uniform float u_map_layer_count;
+        uniform vec2 u_map_layer_norm_size; // (w_norm, h_norm) of a single layer cell
+        uniform float u_map_grid_cols; // Number of columns in the grid
         uniform vec2 u_map_tex_pixel_size;
+        uniform vec2 u_map_uv_scale;
         uniform sampler2D u_wall_atlas; 
         uniform sampler2D u_floor_texture;
         uniform float u_num_textures;
@@ -359,8 +376,9 @@ init -10 python:
         uniform vec4 u_sprites[64]; // x, y, texture_id, pitch_offset
         uniform int u_num_active_sprites;
         uniform vec4 u_objects[128]; // xyz=pos, w=model_id
-        uniform vec4 u_obj_origins[128];
+        uniform vec4 u_obj_origins[128]; // Original world position packed as vec4
         uniform vec4 u_obj_rots[128]; // xyz=euler angles (radians), w=unused
+        uniform vec4 u_obj_scales[128]; // xyz=scale, w=unused
         uniform float u_num_objects;
         uniform sampler2D u_model_atlas;
         uniform float u_num_models;
@@ -514,7 +532,7 @@ init -10 python:
             return -1.0;
         }
     """, fragment_300="""
-        const int MAX_STEPS = 128; 
+        const int MAX_STEPS = 400; 
         
         vec2 stein_uv = v_tex_coord;
 
@@ -603,8 +621,15 @@ init -10 python:
                 int layer_idx = mapPos.z - i_layer_base;
                 
                 if (layer_idx >= 0 && layer_idx < i_layer_count) {
+                    // Grid Packing Logic
+                    float f_idx = float(layer_idx);
+                    float col = mod(f_idx, u_map_grid_cols);
+                    float row = floor(f_idx / u_map_grid_cols);
+                    
+                    vec2 layerOffset = vec2(col * u_map_layer_norm_size.x, row * u_map_layer_norm_size.y);
                     vec2 cellUV = (vec2(float(mapPos.x), float(mapPos.y)) + 0.5) * u_map_tex_pixel_size;
-                    vec2 mapUV = vec2(cellUV.x, cellUV.y + float(layer_idx) * u_map_layer_norm_height);
+                    
+                    vec2 mapUV = layerOffset + cellUV;
                     
                     vec4 mapPixel = texture2D(u_map_texture, mapUV);
                     if (mapPixel.r > 0.5) {
@@ -634,33 +659,49 @@ init -10 python:
             float modelID = u_objects[i].w;
             if (modelID < 0.0) continue;
             
-            // Rotation Logic
+            // Transform Logic (Rotation + Scale)
             vec3 euler = u_obj_rots[i].xyz;
+            vec3 objScale = u_obj_scales[i].xyz;
+            
             vec3 lRayPos = rayPos;
             vec3 lRayDir = rayDir;
             mat3 rotMat = mat3(1.0);
             bool rotated = dot(euler, euler) > 0.0001;
             
-            if (rotated) {
+            if (rotated || length(objScale - vec3(1.0)) > 0.0001) {
+                // To transform object by M, we transform ray by inverse(M).
+                // M = Translation * Rotation * Scale
+                // Inverse(M) = Scale^-1 * Rotation^T * Translation^-1
+                
+                vec3 center = objPos + objScale * 0.5;
                 rotMat = eulerToMat3(euler);
-                // Rotate space around object center to simulate object rotation
-                vec3 center = objPos + vec3(u_obj_scale * 0.5);
-                lRayPos = center + transpose(rotMat) * (rayPos - center);
+                
+                // Translate to center
+                lRayPos = rayPos - center;
+                // Rotate (Inverse)
+                lRayPos = transpose(rotMat) * lRayPos;
                 lRayDir = transpose(rotMat) * rayDir;
+                // Scale (Inverse)
+                lRayPos = lRayPos / objScale;
+                lRayDir = lRayDir / objScale;
+                // Translate back to local box space
+                lRayPos = lRayPos + vec3(0.5); // Local box is now -0.5 to 0.5, move to 0..1
+                
             }
-            
             float tFarBox;
-            float tNearBox = intersectAABB(lRayPos, lRayDir, objPos, objPos + vec3(u_obj_scale), tFarBox);
+            // Intersection with virtual unit box (0..1) since we transformed the ray
+            float tNearBox = intersectAABB(lRayPos, lRayDir, vec3(0.0), vec3(1.0), tFarBox);
             
             if (tNearBox < tFarBox && tFarBox > 0.0 && tNearBox < objDist) {
                 // Add tiny epsilon to enter the box safely
                 float tStart = max(0.0, tNearBox + 0.0001); 
                 
-                vec3 enterPos = lRayPos + lRayDir * tStart - objPos;
+                vec3 enterPos = lRayPos + lRayDir * tStart;
                 
-                float invScale = 16.0 / u_obj_scale;
-                vec3 localPos = enterPos * invScale;
-                vec3 localDir = lRayDir; 
+                // Inside the unit box, we always map to 16x16x16 voxels
+                vec3 localPos = enterPos * 16.0;
+                vec3 localDir = lRayDir;
+                float invScale = 16.0; // Correction factor for DDA t-value
                 
                 // Local DDA
                 ivec3 lMapPos = ivec3(floor(localPos));
@@ -935,9 +976,17 @@ init -10 python:
                 if (distance(vec3(mapPos), u_highlight_pos) < 0.1) is_selected = true;
                 
                 // Multi-selection map check
-                vec2 cellUV_sel = (vec2(float(mapPos.x), float(mapPos.y)) + 0.5) * u_map_tex_pixel_size;
                 int layer_idx_sel = mapPos.z - int(u_map_layer_base_y);
-                vec2 mapUV_sel = vec2(cellUV_sel.x, cellUV_sel.y + float(layer_idx_sel) * u_map_layer_norm_height);
+                
+                float f_idx = float(layer_idx_sel);
+                float col = mod(f_idx, u_map_grid_cols);
+                float row = floor(f_idx / u_map_grid_cols);
+                
+                vec2 layerOffset = vec2(col * u_map_layer_norm_size.x, row * u_map_layer_norm_size.y);
+                vec2 cellUV_sel = (vec2(float(mapPos.x), float(mapPos.y)) + 0.5) * u_map_tex_pixel_size;
+                
+                vec2 mapUV_sel = layerOffset + cellUV_sel;
+                
                 vec4 selData = texture2D(u_selection_texture, mapUV_sel);
                 
                 if (selData.r > 0.5) is_selected = true;
@@ -960,7 +1009,14 @@ init -10 python:
                     int layer_idx_sel = gz - int(u_map_layer_base_y);
                     
                     if (layer_idx_sel >= 0 && layer_idx_sel < int(u_map_layer_count)) {
-                        vec2 mapUV_sel = vec2(cellUV_sel.x, cellUV_sel.y + float(layer_idx_sel) * u_map_layer_norm_height);
+                        float f_idx = float(layer_idx_sel);
+                        float col = mod(f_idx, u_map_grid_cols);
+                        float row = floor(f_idx / u_map_grid_cols);
+                        
+                        vec2 layerOffset = vec2(col * u_map_layer_norm_size.x, row * u_map_layer_norm_size.y);
+                        vec2 cellUV_sel = (vec2(float(gx), float(gy)) + 0.5) * u_map_tex_pixel_size;
+                        vec2 mapUV_sel = layerOffset + cellUV_sel;
+                        
                         vec4 selData = texture2D(u_selection_texture, mapUV_sel);
                         
                         if (selData.r > 0.5) is_selected = true;
@@ -2404,6 +2460,7 @@ init -10 python:
             active_objects = []
             active_origins = []
             active_rots = [] # Euler angles in radians
+            active_scales = []
             
             # Rig Groups (Dynamic Bone Objects)
             if c.editor_mode:
@@ -2418,22 +2475,62 @@ init -10 python:
                     rad_y = math.radians(wt.get('ry', 0.0))
                     rad_z = math.radians(wt.get('rz', 0.0))
                     
+                    # Scales
+                    sx = wt.get('sx', 1.0)
+                    sy = wt.get('sy', 1.0)
+                    sz = wt.get('sz', 1.0)
+                    
+                    # Pre-calc Rotation for Rig
+                    cx, sx_sin = math.cos(rad_x), math.sin(rad_x)
+                    cy, sy_sin = math.cos(rad_y), math.sin(rad_y)
+                    cz, sz_sin = math.cos(rad_z), math.sin(rad_z)
+
                     for ox, oy, oz, mid in parts:
-                        if len(active_objects) >= 128: break
-                        # Dynamic Pos
-                        if c.editor_mode:
-                            wx = float(wt['x']) + float(ox) * 16.0
-                            wy = float(wt['y']) + float(oy) * 16.0
-                            wz = float(wt['z']) + float(oz) * 16.0
-                        else:
-                            pass
+                        if len(active_objects) >= 128: 
+                            print("WARNING: Max render objects (128) reached! Some chunks will be invisible.")
+                            break
+                        
+                        # Calculate Local Center (Offset + Half Scale)
+                        lcx = float(ox) * sx + (0.5 * sx)
+                        lcy = float(oy) * sy + (0.5 * sy)
+                        lcz = float(oz) * sz + (0.5 * sz)
+                        
+                        # Rotate Center (Orbit)
+                        # Rot X
+                        y1 = lcy * cx - lcz * sx_sin
+                        z1 = lcy * sx_sin + lcz * cx
+                        lcy, lcz = y1, z1
+                        # Rot Y
+                        x1 = lcx * cy + lcz * sy_sin
+                        z1 = -lcx * sy_sin + lcz * cy
+                        lcx, lcz = x1, z1
+                        # Rot Z
+                        x1 = lcx * cz - lcy * sz_sin
+                        y1 = lcx * sz_sin + lcy * cz
+                        lcx, lcy = x1, y1
+                        
+                        # Translate to Global Corner
+                        editor_spread = 16.0
+                        lcx = (float(ox) * editor_spread) * sx + (0.5 * sx * editor_spread)
+                        lcy = (float(oy) * editor_spread) * sy + (0.5 * sy * editor_spread)
+                        lcz = (float(oz) * editor_spread) * sz + (0.5 * sz * editor_spread)
+                        
+                        # Rotate
+                        y1 = lcy * cx - lcz * sx_sin; z1 = lcy * sx_sin + lcz * cx; lcy, lcz = y1, z1
+                        x1 = lcx * cy + lcz * sy_sin; z1 = -lcx * sy_sin + lcz * cy; lcx, lcz = x1, z1
+                        x1 = lcx * cz - lcy * sz_sin; y1 = lcx * sz_sin + lcy * cz; lcx, lcy = x1, y1
+                        
+                        # Translate
+                        wx = float(wt['x']) + lcx - (0.5 * sx * editor_spread)
+                        wy = float(wt['y']) + lcy - (0.5 * sy * editor_spread)
+                        wz = float(wt['z']) + lcz - (0.5 * sz * editor_spread)
 
                         active_objects.append((wx, wy, wz, float(mid)))
-                        
-                        # Static Origin
                         active_origins.append((float(ox)*16.0, float(oy)*16.0, float(oz)*16.0, 0.0))
-                        
                         active_rots.append((rad_x, rad_y, rad_z, 0.0))
+                        
+                        # Apply Editor Scale (x16)
+                        active_scales.append((sx * 16.0, sy * 16.0, sz * 16.0, 0.0))
 
             # Scene Objects (Standard Decoration)
             source_objects = getattr(c, 'scene_objects', [])
@@ -2447,14 +2544,52 @@ init -10 python:
                     rad_y = math.radians(getattr(obj, 'rot_y', 0.0))
                     rad_z = math.radians(getattr(obj, 'rot_z', 0.0))
                     
+                    sx = getattr(obj, 'scale_x', 1.0)
+                    sy = getattr(obj, 'scale_y', 1.0)
+                    sz = getattr(obj, 'scale_z', 1.0)
+                    
+                    # Pre-calc Rotation
+                    cx, sx_sin = math.cos(rad_x), math.sin(rad_x)
+                    cy, sy_sin = math.cos(rad_y), math.sin(rad_y)
+                    cz, sz_sin = math.cos(rad_z), math.sin(rad_z)
+                    
                     for ox, oy, oz, mid in parts:
-                        if len(active_objects) >= 128: break
-                        wx = obj.x + float(ox)
-                        wy = obj.y + float(oy)
-                        wz = obj.z + float(oz)
+                        if len(active_objects) >= 128: 
+                            print("WARNING: Max render objects (128) reached! Chunks culled.")
+                            break
+                        
+                        # Calculate Local Center (Offset + Half Scale)
+                        lcx = float(ox) * sx + (0.5 * sx)
+                        lcy = float(oy) * sy + (0.5 * sy)
+                        lcz = float(oz) * sz + (0.5 * sz)
+                        
+                        # Rotate Center (Orbit)
+                        # Rot X
+                        y1 = lcy * cx - lcz * sx_sin
+                        z1 = lcy * sx_sin + lcz * cx
+                        lcy, lcz = y1, z1
+                        # Rot Y
+                        x1 = lcx * cy + lcz * sy_sin
+                        z1 = -lcx * sy_sin + lcz * cy
+                        lcx, lcz = x1, z1
+                        # Rot Z
+                        x1 = lcx * cz - lcy * sz_sin
+                        y1 = lcx * sz_sin + lcy * cz
+                        lcx, lcy = x1, y1
+                        
+                        # Translate to Global Corner
+                        wx = obj.x + lcx - (0.5 * sx)
+                        wy = obj.y + lcy - (0.5 * sy)
+                        wz = obj.z + lcz - (0.5 * sz)
+                        
                         active_objects.append((wx, wy, wz, float(mid)))
-                        active_origins.append((wx*16.0, wy*16.0, wz*16.0, 0.0))
+                        
+                        # Static Origin for highlighting
+                        # We use the unrotated relative chunk index * 16.0 for mapping
+                        active_origins.append((float(ox)*16.0, float(oy)*16.0, float(oz)*16.0, 0.0))
+                        
                         active_rots.append((rad_x, rad_y, rad_z, 0.0))
+                        active_scales.append((sx, sy, sz, 0.0))
             
             num_valid_objects = len(active_objects)
             
@@ -2463,10 +2598,12 @@ init -10 python:
                 active_objects.append((0.0, 0.0, 0.0, -1.0))
                 active_origins.append((0.0, 0.0, 0.0, 0.0))
                 active_rots.append((0.0, 0.0, 0.0, 0.0))
+                active_scales.append((1.0, 1.0, 1.0, 0.0))
 
             renderer.add_uniform("u_objects", active_objects)
             renderer.add_uniform("u_obj_origins", active_origins)
             renderer.add_uniform("u_obj_rots", active_rots)
+            renderer.add_uniform("u_obj_scales", active_scales)
             renderer.add_uniform("u_num_objects", float(num_valid_objects))
 
             if hasattr(c, 'model_atlas'):
@@ -2596,10 +2733,18 @@ init -10 python:
                 c.update_selection_texture()
             renderer.add_uniform('u_selection_texture', c.selection_texture)
 
-            renderer.add_uniform('u_map_layer_norm_height', c.map_layer_norm_height)
+            renderer.add_uniform('u_map_size', (float(c.map_w), float(c.map_h)))
             renderer.add_uniform('u_map_layer_base_y', float(c.min_layer))
             renderer.add_uniform('u_map_layer_count', float(c.num_layers))
+            
+            # Grid Packing Uniforms
+            norm_size = getattr(c, 'map_layer_norm_size', (1.0, 1.0))
+            cols = getattr(c, 'map_grid_cols', 1.0)
+            
+            renderer.add_uniform('u_map_layer_norm_size', norm_size)
+            renderer.add_uniform('u_map_grid_cols', cols)
             renderer.add_uniform('u_map_tex_pixel_size', c.map_tex_pixel_size)
+            renderer.add_uniform('u_map_uv_scale', c.map_uv_scale)
             renderer.add_uniform('u_wall_atlas', c.wall_atlas)
             renderer.add_uniform('u_floor_texture', c.floor_texture)
             renderer.add_uniform('u_num_textures', float(c.num_textures))
@@ -2611,7 +2756,7 @@ init -10 python:
             
             renderer.add_uniform('u_soft_shadows', 1.0 if getattr(persistent, "stein_soft_shadows", True) else 0.0)
             renderer.add_uniform('u_enable_shadows', 1.0 if getattr(persistent, "stein_enable_shadows", True) else 0.0)
-            renderer.add_uniform('u_max_dist', 500.0 if c.builder_mode else 60.0)
+            renderer.add_uniform('u_max_dist', 500.0 if c.builder_mode else 250.0)
             renderer.add_uniform('u_simple_floor', 1.0 if getattr(persistent, "stein_simple_floor", False) else 0.0)
             
             # Flash
@@ -2790,6 +2935,23 @@ init -10 python:
                 return (lrx + prx, lry + pry, lrz + prz)
             
             return (lrx, lry, lrz)
+
+        def get_group_world_scale(self, gname):
+            """Calculates the accumulated world scale for a bone."""
+            if not self.anim_data or "tracks" not in self.anim_data:
+                return (1.0, 1.0, 1.0)
+            
+            lsx = get_anim_value_at_time(self.anim_data, f"group:{gname}:sx", self.current_time, 1.0)
+            lsy = get_anim_value_at_time(self.anim_data, f"group:{gname}:sy", self.current_time, 1.0)
+            lsz = get_anim_value_at_time(self.anim_data, f"group:{gname}:sz", self.current_time, 1.0)
+            
+            parent_name = self.rig_data.get(gname, {}).get("parent")
+            
+            if parent_name and parent_name in self.rig_data:
+                psx, psy, psz = self.get_group_world_scale(parent_name)
+                return (lsx * psx, lsy * psy, lsz * psz)
+            
+            return (lsx, lsy, lsz)
 
         def update(self, dt):
             if not self.is_playing or not self.anim_data:
@@ -3024,7 +3186,10 @@ init -10 python:
                     sobj.rot_y = gry + self.anim_controller.ory
                     sobj.rot_z = grz + self.anim_controller.orz
                     
-                    sobj.scale_x = self.anim_controller.osx
+                    gsx, gsy, gsz = self.anim_controller.get_group_world_scale(gname)
+                    sobj.scale_x = gsx * self.anim_controller.osx
+                    sobj.scale_y = gsy * self.anim_controller.osy
+                    sobj.scale_z = gsz * self.anim_controller.osz
 
     class VoxelSniper(VoxelEntity):
         def __init__(self, wm, x, y, z, filename=MODEL_VOXEL_SNIPER, health=80):
@@ -3123,7 +3288,6 @@ init -10 python:
             self.worldMap = worldMap
             self.editor_mode = editor_mode 
             self.is_arena_mode = getattr(renpy.store, 'is_arena_mode', False)
-            # print(f"DEBUG INIT: GPURenpystein initialized. Arena Mode: {self.is_arena_mode}")
             
             self.editor_target = None # For Editor Inverse Camera logic
             self.highlight_pos = (-1.0, -1.0, -1.0) # Voxel selection coordinates
@@ -3850,11 +4014,12 @@ init -10 python:
                 s = pygame.Surface((1,1), flags=pygame.SRCALPHA, depth=32)
                 return renpy.display.draw.load_texture(s), 0.0
 
-            w = 256
-            h = 16 * num_total_chunks
-            surf = pygame.Surface((w, h), flags=pygame.SRCALPHA, depth=32)
-            surf.fill((0,0,0,0))
+            tex_width = 256
+            tex_height = num_total_chunks * 16
             
+            surf = pygame.Surface((tex_width, tex_height), flags=pygame.SRCALPHA, depth=32)
+            
+            # Fill Atlas
             for i, chunk_layers in enumerate(all_chunks):
                 base_y_atlas = i * 16
                 for z, rows in chunk_layers.items():
@@ -3880,23 +4045,56 @@ init -10 python:
                 for k, v in self.worldMap.items():
                     try:
                         layers[int(k)] = v
-                    except: pass
+                    except:
+                        pass
             
-            self.worldMap = layers 
-            max_x = 0; max_y = 0; min_z = 0; max_z = 0
-            if layers:
-                min_z = min(layers.keys()); max_z = max(layers.keys())
-                for z, grid in layers.items():
-                    if len(grid) > max_x: max_x = len(grid)
-                    if len(grid) > 0 and len(grid[0]) > max_y: max_y = len(grid[0])
+            # Determine dimensions
+            min_z = 0 if not layers else min(layers.keys())
+            max_z = 0 if not layers else max(layers.keys())
+            max_x = 0; max_y = 0
+            for grid in layers.values():
+                if len(grid) > max_x: max_x = len(grid)
+                if len(grid) > 0 and len(grid[0]) > max_y: max_y = len(grid[0])
             
             self.map_w = max_x; self.map_h = max_y; self.min_layer = min_z; self.max_layer = max_z; self.num_layers = max_z - min_z + 1
             
-            layer_h_pixels = next_power_of_two(max_y)
-            w_pot = max(64, next_power_of_two(max_x))
-            h_pot = max(64, next_power_of_two(layer_h_pixels * self.num_layers))
+            # Sync physics dimensions
+            self.mapWidth = self.map_w
+            self.mapHeight = self.map_h
+            
+            # Grid Packing Logic
+            # Find a POT size for a single layer
+            layer_w_pot = max(64, next_power_of_two(max_x))
+            layer_h_pot = max(64, next_power_of_two(max_y))
+            
+            # Target Atlas Size (Square is best for GPU)
+            # Try to fit all layers into 4096 (Safe Limit) or 8192
+            # Total Area needed = layer_area * num_layers
+            total_area = layer_w_pot * layer_h_pot * self.num_layers
+            target_dim = next_power_of_two(int(math.sqrt(total_area)))
+            target_dim = max(target_dim, layer_w_pot, layer_h_pot)
+            
+            # Clamp to safe max (e.g. 4096) if possible, else go higher and pray
+            MAX_TEX_SIZE = 4096
+            if target_dim < MAX_TEX_SIZE and (target_dim * target_dim) < total_area:
+                target_dim *= 2 # Grow if needed
+            
+            atlas_w = target_dim
+            atlas_h = target_dim
+            
+            # Calculate Columns and Rows
+            cols = atlas_w // layer_w_pot
+            rows = atlas_h // layer_h_pot
+            
+            # If it doesn't fit, grow height
+            while (cols * rows) < self.num_layers:
+                atlas_h *= 2
+                rows = atlas_h // layer_h_pot
+                if atlas_h > 16384: # Hard limit
+                    print("CRITICAL WARNING: Map is too massive for GPU texture limits!")
+                    break
 
-            surf = pygame.Surface((w_pot, h_pot), flags=pygame.SRCALPHA, depth=32)
+            surf = pygame.Surface((atlas_w, atlas_h), flags=pygame.SRCALPHA, depth=32)
             surf.fill((0,0,0,255))
             
             # Identify ALL voxels that belong to any group
@@ -3907,14 +4105,20 @@ init -10 python:
 
             for z, grid in layers.items():
                 layer_idx = z - min_z
-                base_y = layer_idx * layer_h_pixels
-                for map_x, row in enumerate(grid):
-                    for map_y, tile in enumerate(row):
+                
+                # Grid Coords
+                col = layer_idx % cols
+                row = layer_idx // cols
+                
+                base_x = col * layer_w_pot
+                base_y = row * layer_h_pot
+                
+                for map_x, grid_row in enumerate(grid):
+                    for map_y, tile in enumerate(grid_row):
                         if tile > 0:
-                            # Strict removal: if it is grouped, do not draw in static map
                             if (int(map_x), int(map_y), int(z)) in grouped_lookup:
                                 continue
-                            surf.set_at((map_x, base_y + map_y), (255, tile, 0, 255))
+                            surf.set_at((base_x + map_x, base_y + map_y), (255, tile, 0, 255))
             
             self.flat_map_buffer = flatten_world_map(
                 self.worldMap, self.map_w, self.map_h, 
@@ -3922,9 +4126,11 @@ init -10 python:
             )
             
             # Calculate uniforms
-            self.map_layer_norm_height = float(layer_h_pixels) / float(h_pot)
-            self.map_tex_pixel_size = (1.0 / float(w_pot), 1.0 / float(h_pot))
-            self.map_uv_scale = (float(max_x) / float(w_pot), float(max_y) / float(layer_h_pixels)) 
+            # u_map_grid_layout: (cols, layer_w_norm, layer_h_norm)
+            self.map_layer_norm_size = (float(layer_w_pot) / float(atlas_w), float(layer_h_pot) / float(atlas_h))
+            self.map_grid_cols = float(cols)
+            self.map_tex_pixel_size = (1.0 / float(atlas_w), 1.0 / float(atlas_h))
+            self.map_uv_scale = (float(max_x) / float(layer_w_pot), float(max_y) / float(layer_h_pot)) # Scale UV within the layer cell
             
             return renpy.display.draw.load_texture(surf)
 
@@ -3934,21 +4140,54 @@ init -10 python:
                 if n == 0: return 1
                 return 2**math.ceil(math.log(n, 2))
             
-            layer_h_pixels = next_power_of_two(self.map_h)
-            w_pot = max(64, next_power_of_two(self.map_w))
-            h_pot = max(64, next_power_of_two(layer_h_pixels * self.num_layers))
+            # Use same dimensions as map texture to ensure alignment
+            layer_w_pot = max(64, next_power_of_two(self.map_w))
+            layer_h_pot = max(64, next_power_of_two(self.map_h))
+            
+            # Recalculate Atlas Size
+            total_area = layer_w_pot * layer_h_pot * self.num_layers
+            target_dim = next_power_of_two(int(math.sqrt(total_area)))
+            target_dim = max(target_dim, layer_w_pot, layer_h_pot)
+            MAX_TEX_SIZE = 4096
+            if target_dim < MAX_TEX_SIZE and (target_dim * target_dim) < total_area:
+                target_dim *= 2
+            
+            atlas_w = target_dim
+            atlas_h = target_dim
+            
+            cols = atlas_w // layer_w_pot
+            rows = atlas_h // layer_h_pot
+            while (cols * rows) < self.num_layers:
+                atlas_h *= 2
+                rows = atlas_h // layer_h_pot
+                if atlas_h > 16384: break
 
-            surf = pygame.Surface((w_pot, h_pot), flags=pygame.SRCALPHA, depth=32)
+            surf = pygame.Surface((atlas_w, atlas_h), flags=pygame.SRCALPHA, depth=32)
             surf.fill((0,0,0,0))
             
+            # Helper to get pixel coords
+            def get_pixel_coords(mx, my, mz):
+                l_idx = int(mz) - self.min_layer
+                if l_idx < 0 or l_idx >= self.num_layers: return None
+                
+                col = l_idx % cols
+                row = l_idx // cols
+                
+                bx = col * layer_w_pot
+                by = row * layer_h_pot
+                
+                px = bx + mx
+                py = by + my
+                if 0 <= px < atlas_w and 0 <= py < atlas_h:
+                    return (px, py)
+                return None
+
             # Draw Selection (Red Channel)
             for pos in self.selection_map.keys():
                 mx, my, mz = pos
-                layer_idx = int(mz) - self.min_layer
-                if 0 <= layer_idx < self.num_layers:
-                    base_y = int(layer_idx * layer_h_pixels)
-                    if 0 <= mx < w_pot and 0 <= (base_y + my) < h_pot:
-                        surf.set_at((int(mx), int(base_y + my)), (255, 0, 0, 255))
+                coords = get_pixel_coords(mx, my, mz)
+                if coords:
+                    surf.set_at(coords, (255, 0, 0, 255))
             
             # Draw Bones (Green Channel)
             if self.show_bones:
@@ -3966,13 +4205,10 @@ init -10 python:
                                 t = float(s) / max(1, steps)
                                 lx, ly, lz = p1[0] + (p2[0]-p1[0])*t, p1[1] + (p2[1]-p1[1])*t, p1[2] + (p2[2]-p1[2])*t
                                 
-                                l_idx = int(lz) - self.min_layer
-                                if 0 <= l_idx < self.num_layers:
-                                    by = int(l_idx * layer_h_pixels)
-                                    px, py = int(lx), int(by + ly)
-                                    if 0 <= px < w_pot and 0 <= py < h_pot:
-                                        c = surf.get_at((px, py))
-                                        surf.set_at((px, py), (c[0], 255, 0, 255))
+                                coords = get_pixel_coords(int(lx), int(ly), int(lz))
+                                if coords:
+                                    c = surf.get_at(coords)
+                                    surf.set_at(coords, (c[0], 255, 0, 255))
 
             self.selection_texture = renpy.display.draw.load_texture(surf)
 
@@ -4078,7 +4314,7 @@ init -10 python:
         def get_group_accumulated_transform(self, gname):
             """Recursively calculates the world transform for a group based on its parents."""
             if gname not in self.voxel_groups:
-                return {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rx': 0.0, 'ry': 0.0, 'rz': 0.0}
+                return {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rx': 0.0, 'ry': 0.0, 'rz': 0.0, 'sx': 1.0, 'sy': 1.0, 'sz': 1.0}
             
             gdata = self.voxel_groups[gname]
             local_t = self.editor_target.get_group_data(gname)
@@ -4087,13 +4323,17 @@ init -10 python:
             if pname and pname in self.voxel_groups:
                 pt = self.get_group_accumulated_transform(pname)
                 # Position is simple additive for now (Translation)
+                # Scale is multiplicative
                 return {
                     'x': pt['x'] + local_t.get('x', 0.0),
                     'y': pt['y'] + local_t.get('y', 0.0),
                     'z': pt['z'] + local_t.get('z', 0.0),
                     'rx': pt.get('rx', 0.0) + local_t.get('rx', 0.0),
                     'ry': pt.get('ry', 0.0) + local_t.get('ry', 0.0),
-                    'rz': pt.get('rz', 0.0) + local_t.get('rz', 0.0)
+                    'rz': pt.get('rz', 0.0) + local_t.get('rz', 0.0),
+                    'sx': pt.get('sx', 1.0) * local_t.get('sx', 1.0),
+                    'sy': pt.get('sy', 1.0) * local_t.get('sy', 1.0),
+                    'sz': pt.get('sz', 1.0) * local_t.get('sz', 1.0)
                 }
             
             return {
@@ -4102,7 +4342,10 @@ init -10 python:
                 'z': local_t.get('z', 0.0),
                 'rx': local_t.get('rx', 0.0),
                 'ry': local_t.get('ry', 0.0),
-                'rz': local_t.get('rz', 0.0)
+                'rz': local_t.get('rz', 0.0),
+                'sx': local_t.get('sx', 1.0),
+                'sy': local_t.get('sy', 1.0),
+                'sz': local_t.get('sz', 1.0)
             }
 
         def refresh_rig_visuals(self):

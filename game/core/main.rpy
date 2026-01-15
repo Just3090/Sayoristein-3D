@@ -425,7 +425,7 @@ init python:
     # --- Level 1 Data ---
     level1_data = {
         "lighting": "day",
-        "worldMap": load_level_json("e_01.json"),
+        "worldMap": load_level_json("blender_import.json"),
         "player_x": 5.5, "player_y": 4.5,
         "player_dirx": -1.0, "player_diry": 0.0,
         "player_planex": 0.0, "player_planey": 0.66,
@@ -1244,6 +1244,16 @@ screen animation_editor():
                                                         input value FloatInputValue(renderer.editor_target, fld) length 12 color "#FFF" pixel_width 80 action SetScreenVariable("editing_field", None)
                                                     else:
                                                         textbutton "[getattr(renderer.editor_target, fld):.1f]" action SetScreenVariable("editing_field", fld) text_color "#FFF" text_size 12
+                                        vbox:
+                                            xsize 80
+                                            text "Scale" size 12 color "#666"
+                                            for fld in ['sx', 'sy', 'sz']:
+                                                hbox:
+                                                    text "[fld!u]:" color "#AAA" yalign 0.5 size 12
+                                                    if editing_field == fld:
+                                                        input value FloatInputValue(renderer.editor_target, fld) length 12 color "#FFF" pixel_width 80 action SetScreenVariable("editing_field", None)
+                                                    else:
+                                                        textbutton "[getattr(renderer.editor_target, fld):.2f]" action SetScreenVariable("editing_field", fld) text_color "#FFF" text_size 12
                                     
                                     hbox:
                                         spacing 10
@@ -1293,6 +1303,16 @@ screen animation_editor():
                                                         input value GroupFloatInputValue(renderer.editor_target, active_gname, fld) length 12 color "#FFF" pixel_width 80 action SetScreenVariable("editing_field", None)
                                                     else:
                                                         textbutton "[gdata_obj.get(fld, 0.0):.1f]" action SetScreenVariable("editing_field", fld) text_color "#FFF" text_size 12
+                                        vbox:
+                                            xsize 80
+                                            text "Local Scale" size 12 color "#666"
+                                            for fld in ['sx', 'sy', 'sz']:
+                                                hbox:
+                                                    text "[fld!u]:" color "#AAA" yalign 0.5 size 12
+                                                    if editing_field == fld:
+                                                        input value GroupFloatInputValue(renderer.editor_target, active_gname, fld) length 12 color "#FFF" pixel_width 80 action SetScreenVariable("editing_field", None)
+                                                    else:
+                                                        textbutton "[gdata_obj.get(fld, 1.0):.2f]" action SetScreenVariable("editing_field", fld) text_color "#FFF" text_size 12
                                     
                                     hbox:
                                         spacing 10

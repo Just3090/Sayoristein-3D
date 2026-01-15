@@ -14,7 +14,7 @@ define ENEMY_TYPE_VOXEL_ELITE  = 102
 define ENEMY_TYPE_VOXEL_YURITLER = 103
 
 # Model Filenames
-define MODEL_VOXEL_BASIC    = "random_enemy.json"
+define MODEL_VOXEL_BASIC    = "blender_import.json"
 define MODEL_VOXEL_SNIPER   = "random_enemy.json"
 define MODEL_VOXEL_ELITE    = "random_enemy.json"
 define MODEL_VOXEL_YURITLER = "random_enemy.json"
