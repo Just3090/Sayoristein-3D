@@ -39,5 +39,6 @@ stein_core.dll
 stein_core.exp
 stein_core.lib
 stein_core.obj
+stein_core.so
 
 .idea/
