@@ -779,10 +779,11 @@ label start_level_3:
     jump renpystein_game
 
 label start_level_4_arena:
-    call screen shader_warmup
-    $ js_stein_audio.play("arena")
-    $ reset_stein_state(level=4, arena=True)
-    jump renpystein_game
+    # call screen shader_warmup
+    # $ js_stein_audio.play("arena")
+    # $ reset_stein_state(level=4, arena=True)
+    # jump renpystein_game
+    jump start_taichi_engine
 
 label start_level_5:
     # call screen shader_warmup
