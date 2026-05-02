@@ -37,13 +37,18 @@ init -5 python:
             self.texture_data = ti.Vector.field(3, dtype=ti.u8, shape=(self.tex_w, self.tex_h))
             self.init_texture()
             
-    T_pixels = ti.Vector.field(n=4, dtype=ti.u8, shape=(600, 1066))
-    T_zbuffer = ti.field(dtype=ti.f32, shape=(600, 1066))
-    T_vertices = ti.Vector.field(3, dtype=ti.f32, shape=1)
-    T_normals = ti.Vector.field(3, dtype=ti.f32, shape=1)
-    T_uvs = ti.Vector.field(2, dtype=ti.f32, shape=1)
-    T_indices = ti.field(dtype=ti.i32, shape=1)
-    T_projected = ti.Vector.field(6, dtype=ti.f32, shape=1)
+    MAX_RES_X = 1066
+    MAX_RES_Y = 600
+    MAX_TRIS = 500000
+    MAX_VERTS = MAX_TRIS * 3
+
+    T_pixels = ti.Vector.field(n=4, dtype=ti.u8, shape=(MAX_RES_Y, MAX_RES_X))
+    T_zbuffer = ti.field(dtype=ti.f32, shape=(MAX_RES_Y, MAX_RES_X))
+    T_vertices = ti.Vector.field(3, dtype=ti.f32, shape=MAX_VERTS)
+    T_normals = ti.Vector.field(3, dtype=ti.f32, shape=MAX_VERTS)
+    T_uvs = ti.Vector.field(2, dtype=ti.f32, shape=MAX_VERTS)
+    T_indices = ti.field(dtype=ti.i32, shape=MAX_TRIS * 3)
+    T_projected = ti.Vector.field(6, dtype=ti.f32, shape=MAX_VERTS)
     global_num_vertices = 0
     global_num_triangles = 0
 
@@ -263,9 +268,7 @@ init -5 python:
             return plane
         return _deep_find_plane(world_map)
 
-    def load_level_to_taichi(map_grid):
-        global T_vertices, T_normals, T_uvs, T_indices, T_projected
-        global global_num_vertices, global_num_triangles
+    def get_level_geometry(map_grid):
         map_grid = normalize_worldmap_plane(map_grid)
 
         w = len(map_grid)
@@ -330,27 +333,7 @@ init -5 python:
                         [0.0, -1.0, 0.0]
                     )
 
-        num_verts = len(v_list)
-        num_tris = len(i_list) // 3
-        global_num_vertices = num_verts
-        global_num_triangles = num_tris
-
-        if num_verts > 0:
-            T_vertices = ti.Vector.field(3, dtype=ti.f32, shape=num_verts)
-            T_normals = ti.Vector.field(3, dtype=ti.f32, shape=num_verts)
-            T_uvs = ti.Vector.field(2, dtype=ti.f32, shape=num_verts)
-            T_indices = ti.field(dtype=ti.i32, shape=num_tris * 3)
-            T_projected = ti.Vector.field(6, dtype=ti.f32, shape=num_verts)
-            
-            T_vertices.from_numpy(np.array(v_list, dtype=np.float32))
-            T_normals.from_numpy(np.array(n_list, dtype=np.float32))
-            T_uvs.from_numpy(np.array(u_list, dtype=np.float32))
-            T_indices.from_numpy(np.array(i_list, dtype=np.int32))
-            
-            taichi_init_texture()
-            print(f"Debug: Nivel 3D with {num_verts} vertices & {num_tris} triangles.")
-        else:
-            print("Debug: Clean map.")
+        return v_list, n_list, u_list, i_list
 
     def _obj_idx(tok, count):
         if not tok:
@@ -361,15 +344,10 @@ init -5 python:
             return None
         return i - 1 if i > 0 else count + i
 
-    def load_obj_to_taichi(obj_path, scale=1.0):
-        global T_vertices, T_normals, T_uvs, T_indices, T_projected
-        global global_num_vertices, global_num_triangles
-
+    def get_obj_geometry(obj_path, scale=1.0):
         if not obj_path or (not os.path.exists(obj_path)):
             print(f"Sayoristein: OBJ not present: {obj_path}")
-            global_num_vertices = 0
-            global_num_triangles = 0
-            return False
+            return [], [], [], []
 
         positions = []
         texcoords = []
@@ -432,20 +410,11 @@ init -5 python:
                             for k in range(1, len(face) - 1):
                                 i_list.extend([face[0], face[k], face[k + 1]])
         except Exception as e:
-            print(f"Sayoristein: Error leyendo OBJ '{obj_path}': {e}")
-            global_num_vertices = 0
-            global_num_triangles = 0
-            return False
+            print(f"Sayoristein: Error reading OBJ '{obj_path}': {e}")
+            return [], [], [], []
 
-        num_tris = len(i_list) // 3
-
-        num_verts = len(v_list)
-        num_tris = len(i_list) // 3
-        if num_verts <= 0 or num_tris <= 0:
-            print(f"Sayoristein: OBJ sin geometría útil: {obj_path}")
-            global_num_vertices = 0
-            global_num_triangles = 0
-            return False
+        if not v_list or not i_list:
+            return [], [], [], []
 
         v_np = np.array(v_list, dtype=np.float32)
         min_v = v_np.min(axis=0)
@@ -455,64 +424,31 @@ init -5 python:
         v_np[:, 0] = (v_np[:, 0] - center[0]) * scale
         v_np[:, 1] = (v_np[:, 1] - min_v[1]) * scale
         v_np[:, 2] = (v_np[:, 2] - center[2]) * scale
-
-        global_num_vertices = num_verts
-        global_num_triangles = num_tris
-
-        T_vertices = ti.Vector.field(3, dtype=ti.f32, shape=num_verts)
-        T_normals = ti.Vector.field(3, dtype=ti.f32, shape=num_verts)
-        T_uvs = ti.Vector.field(2, dtype=ti.f32, shape=num_verts)
-        T_indices = ti.field(dtype=ti.i32, shape=num_tris * 3)
-        T_projected = ti.Vector.field(6, dtype=ti.f32, shape=num_verts)
-
-        T_vertices.from_numpy(v_np)
-        T_normals.from_numpy(np.array(n_list, dtype=np.float32))
-        T_uvs.from_numpy(np.array(u_list, dtype=np.float32))
-        T_indices.from_numpy(np.array(i_list, dtype=np.int32))
-        taichi_init_texture()
-
-        print(f"Sayoristein: OBJ loaded '{obj_path}' with {num_verts} vertices & {num_tris} triangles.")
-        return True
+        
+        return v_np.tolist(), n_list, u_list, i_list
 
 
     class TaichiEngineDisplayable(renpy.Displayable):
         def __init__(self, map_grid=None, model_path=None, **kwargs):
             super(TaichiEngineDisplayable, self).__init__(**kwargs)
-            qmode = getattr(persistent, "stein_quality_mode", 1)
-            if qmode == 0:
-                self.render_scale = 0.75
-            elif qmode == 1:
-                self.render_scale = 0.5
-            elif qmode == 2:
-                self.render_scale = 0.4
-            elif qmode == 3:
-                self.render_scale = 0.3
-            else:
-                self.render_scale = 0.25
-
-            if model_path:
-                if qmode == 0:
-                    self.render_scale = min(self.render_scale, 0.20)
-                elif qmode == 1:
-                    self.render_scale = min(self.render_scale, 0.18)
-                elif qmode == 2:
-                    self.render_scale = min(self.render_scale, 0.16)
-                elif qmode == 3:
-                    self.render_scale = min(self.render_scale, 0.14)
-                else:
-                    self.render_scale = min(self.render_scale, 0.12)
-            self.res_x = int(1066 * self.render_scale)
-            self.res_y = int(600 * self.render_scale)
+            self.model_path = model_path
             
-            global T_pixels, T_zbuffer
-            T_pixels = ti.Vector.field(n=4, dtype=ti.u8, shape=(self.res_y, self.res_x))
-            T_zbuffer = ti.field(dtype=ti.f32, shape=(self.res_y, self.res_x))
-
-            loaded_model = False
+            self.raw_v_list = []
+            self.raw_n_list = []
+            self.raw_u_list = []
+            self.raw_i_list = []
+            
             if model_path:
-                loaded_model = load_obj_to_taichi(model_path, scale=1.0)
-            if not loaded_model:
-                load_level_to_taichi(map_grid)
+                v, n, u, i = get_obj_geometry(model_path, scale=1.0)
+                self.raw_v_list, self.raw_n_list, self.raw_u_list, self.raw_i_list = v, n, u, i
+                loaded_model = len(v) > 0
+            else:
+                v, n, u, i = get_level_geometry(map_grid)
+                self.raw_v_list, self.raw_n_list, self.raw_u_list, self.raw_i_list = v, n, u, i
+                loaded_model = False
+            
+            self.reapply_quality()
+            self.last_qmode = getattr(persistent, "stein_quality_mode", 1)
             
             self.player_x = 0.0 if loaded_model else 2.0
             self.player_y = 1.8 if loaded_model else 0.5
@@ -545,6 +481,64 @@ init -5 python:
             self.map_w = 0
             self.map_h = 0
             
+        def reapply_quality(self):
+            qmode = getattr(persistent, "stein_quality_mode", 1)
+            if qmode == 0:
+                self.render_scale = 0.75
+            elif qmode == 1:
+                self.render_scale = 0.5
+            elif qmode == 2:
+                self.render_scale = 0.4
+            elif qmode == 3:
+                self.render_scale = 0.3
+            else:
+                self.render_scale = 0.25
+
+            if self.model_path:
+                if qmode == 0:
+                    self.render_scale = min(self.render_scale, 0.75)
+                elif qmode == 1:
+                    self.render_scale = min(self.render_scale, 0.50)
+                elif qmode == 2:
+                    self.render_scale = min(self.render_scale, 0.25)
+                elif qmode == 3:
+                    self.render_scale = min(self.render_scale, 0.14)
+                else:
+                    self.render_scale = min(self.render_scale, 0.12)
+            
+            self.res_x = int(1066 * self.render_scale)
+            self.res_y = int(600 * self.render_scale)
+            
+            v_np = np.array(self.raw_v_list, dtype=np.float32)
+            n_np = np.array(self.raw_n_list, dtype=np.float32)
+            u_np = np.array(self.raw_u_list, dtype=np.float32)
+            i_np = np.array(self.raw_i_list, dtype=np.int32)
+            
+            if len(v_np) > MAX_VERTS:
+                v_np = v_np[:MAX_VERTS]
+                n_np = n_np[:MAX_VERTS]
+                u_np = u_np[:MAX_VERTS]
+            
+            if len(i_np) > MAX_TRIS * 3:
+                i_np = i_np[:MAX_TRIS * 3]
+            
+            global global_num_vertices, global_num_triangles
+            global_num_vertices = len(v_np)
+            global_num_triangles = len(i_np) // 3
+            
+            v_np.resize((MAX_VERTS, 3), refcheck=False)
+            n_np.resize((MAX_VERTS, 3), refcheck=False)
+            u_np.resize((MAX_VERTS, 2), refcheck=False)
+            i_np.resize((MAX_TRIS * 3,), refcheck=False)
+            
+            T_vertices.from_numpy(v_np)
+            T_normals.from_numpy(n_np)
+            T_uvs.from_numpy(u_np)
+            T_indices.from_numpy(i_np)
+            
+            taichi_init_texture()
+            print(f"Taichi Engine: Applied quality mode {qmode}, resolution {self.res_x}x{self.res_y}")
+            
         def event(self, ev, x, y, st):
             import pygame_sdl2 as pygame
             if not self.mouse_initialized:
@@ -571,6 +565,11 @@ init -5 python:
                 return
 
         def render(self, width, height, st, at):
+            current_qmode = getattr(persistent, "stein_quality_mode", 1)
+            if not hasattr(self, "last_qmode") or self.last_qmode != current_qmode:
+                self.reapply_quality()
+                self.last_qmode = current_qmode
+
             keys = pygame.key.get_pressed()
             self.input_y = 0.0
             self.input_x = 0.0
@@ -620,7 +619,9 @@ init -5 python:
                                         float(self.res_x), float(self.res_y), global_num_vertices)
                 taichi_render_3d(self.res_x, self.res_y, global_num_triangles)
                 
-            raw_bytes = T_pixels.to_numpy().tobytes()
+            full_array = T_pixels.to_numpy()
+            active_slice = full_array[:self.res_y, :self.res_x]
+            raw_bytes = active_slice.tobytes()
             
             pg_surf = pygame.Surface((self.res_x, self.res_y), 0, 32)
             pg_surf.from_data(raw_bytes)
