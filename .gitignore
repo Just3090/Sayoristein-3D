@@ -42,3 +42,4 @@ stein_core.obj
 stein_core.so
 
 .idea/
+python-packages/
