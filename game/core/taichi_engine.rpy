@@ -114,8 +114,8 @@ init -5 python:
             i2 = T_indices[t_idx * 3 + 2]
 
             v0 = T_projected[i0]
-            v1 = T_projected[i1]
-            v2 = T_projected[i2]
+            v1 = T_projected[i2]
+            v2 = T_projected[i1]
 
             if v0[2] > 0.0 and v1[2] > 0.0 and v2[2] > 0.0:
                 area = edge_function(v0, v1, v2)
