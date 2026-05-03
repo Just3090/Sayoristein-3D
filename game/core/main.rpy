@@ -178,6 +178,17 @@ init python:
                     files.append(f)
         return sorted(files)
 
+    def get_obj_files():
+        models_dir = os.path.join(config.gamedir, "models")
+        files = []
+        if os.path.exists(models_dir):
+            for root, _, filenames in os.walk(models_dir):
+                for f in filenames:
+                    if f.lower().endswith(".obj"):
+                        rel_path = os.path.relpath(os.path.join(root, f), models_dir)
+                        files.append(rel_path)
+        return sorted(files)
+
     def load_object_json(filename):
         """
         Loads a voxel model from game/save_objects/filename.

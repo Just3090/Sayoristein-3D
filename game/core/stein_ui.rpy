@@ -78,6 +78,8 @@ screen sayoristein_menu():
 
         textbutton _("Play") action ShowMenu("sayoristein_arena_hub") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
         textbutton _("Settings") action ShowMenu("sayoristein_settings_menu") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
+        textbutton _("Mesh Map Editor") action Jump("start_mesh_editor") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
+        textbutton _("Old DDA: Animation Editor") action Jump("start_animation_editor") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
         textbutton _("Exit") action Quit() style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
 
 screen sayoristein_settings_menu():

@@ -37,8 +37,8 @@ init -5 python:
             self.texture_data = ti.Vector.field(3, dtype=ti.u8, shape=(self.tex_w, self.tex_h))
             self.init_texture()
             
-    MAX_RES_X = 1066
-    MAX_RES_Y = 600
+    MAX_RES_X = 1920
+    MAX_RES_Y = 1080
     MAX_TRIS = 2000000
     MAX_VERTS = MAX_TRIS * 3
 
@@ -481,9 +481,10 @@ init -5 python:
         
         return v_np.tolist(), n_list, u_list, i_list
 
+    TAICHI_DEBUG_CAMERA_INPUT = False
 
     class TaichiEngineDisplayable(renpy.Displayable):
-        def __init__(self, map_grid=None, model_path=None, **kwargs):
+        def __init__(self, map_grid=None, model_path=None, mesh_map=None, **kwargs):
             super(TaichiEngineDisplayable, self).__init__(**kwargs)
             self.model_path = model_path
             
@@ -491,8 +492,15 @@ init -5 python:
             self.raw_n_list = []
             self.raw_u_list = []
             self.raw_i_list = []
+
+            self.editor_viewport_res = None
             
-            if model_path:
+            gpu_applied_via_mesh_load = False
+            if mesh_map and mesh_map.get("instances"):
+                self.load_mesh_map(mesh_map)
+                gpu_applied_via_mesh_load = True
+                loaded_model = True
+            elif model_path:
                 v, n, u, i = get_obj_geometry(model_path, scale=1.0)
                 self.raw_v_list, self.raw_n_list, self.raw_u_list, self.raw_i_list = v, n, u, i
                 loaded_model = len(v) > 0
@@ -501,7 +509,8 @@ init -5 python:
                 self.raw_v_list, self.raw_n_list, self.raw_u_list, self.raw_i_list = v, n, u, i
                 loaded_model = False
             
-            self.reapply_quality()
+            if not gpu_applied_via_mesh_load:
+                self.reapply_quality()
             self.last_qmode = getattr(persistent, "stein_quality_mode", 1)
             
             self.player_x = 0.0 if loaded_model else 2.0
@@ -520,9 +529,10 @@ init -5 python:
             self.mouse_dx = 0.0
             self.mouse_dy = 0.0
             self.mouse_initialized = False
+            self.rmb_down = False
             self.skip_mouse = False
-            self.mouse_sens = 0.10
-            self.mouse_pitch_sens = 0.0030
+            self.mouse_sens = 0.003
+            self.mouse_pitch_sens = 0.003
             self.vertical_speed = 3.0
             self.pitch_speed = 1.5
             self.player_pitch = 0.0
@@ -531,10 +541,64 @@ init -5 python:
             self.accumulated_ms = 0.0
             self.frame_count = 0
             self.last_print = time.time()
+            self._debug_cam_last_motion_log = 0.0
             
             self.map_w = 0
             self.map_h = 0
+
+        def load_mesh_map(self, mesh_map):
+            self.raw_v_list = []
+            self.raw_n_list = []
+            self.raw_u_list = []
+            self.raw_i_list = []
             
+            current_vertex_offset = 0
+            
+            for inst in mesh_map.get("instances", []):
+                obj_rel_path = inst.get("obj_path")
+                if not obj_rel_path: continue
+                
+                obj_path = os.path.join(config.gamedir, "models", obj_rel_path)
+                
+                pos = inst.get("position", [0.0, 0.0, 0.0])
+                rot = inst.get("rotation", [0.0, 0.0, 0.0]) # yaw, pitch, roll
+                scale = inst.get("scale", [1.0, 1.0, 1.0])
+                
+                v, n, u, i = get_obj_geometry(obj_path, scale=1.0)
+                if not v: continue
+                
+                v_np = np.array(v, dtype=np.float32)
+                
+                if isinstance(scale, (int, float)):
+                    s_vec = np.array([scale, scale, scale], dtype=np.float32)
+                else:
+                    s_vec = np.array(scale, dtype=np.float32)
+                v_np *= s_vec
+                
+                yaw = math.radians(rot[0])
+                cy = math.cos(yaw)
+                sy = math.sin(yaw)
+                
+                x_new = v_np[:, 0] * cy - v_np[:, 2] * sy
+                z_new = v_np[:, 0] * sy + v_np[:, 2] * cy
+                v_np[:, 0] = x_new
+                v_np[:, 2] = z_new
+                
+                v_np[:, 0] += pos[0]
+                v_np[:, 1] += pos[1]
+                v_np[:, 2] += pos[2]
+                
+                self.raw_v_list.extend(v_np.tolist())
+                self.raw_n_list.extend(n)
+                self.raw_u_list.extend(u)
+                
+                offset_indices = [idx + current_vertex_offset for idx in i]
+                self.raw_i_list.extend(offset_indices)
+                
+                current_vertex_offset += len(v)
+
+            self.reapply_quality()
+        
         def reapply_quality(self):
             qmode = getattr(persistent, "stein_quality_mode", 1)
             if qmode == 0:
@@ -562,6 +626,12 @@ init -5 python:
             
             self.res_x = int(1066 * self.render_scale)
             self.res_y = int(600 * self.render_scale)
+            ov = getattr(self, "editor_viewport_res", None)
+            if ov is not None:
+                ow, oh = ov
+                if ow and oh:
+                    self.res_x = int(ow)
+                    self.res_y = int(oh)
             
             v_np = np.array(self.raw_v_list, dtype=np.float32)
             n_np = np.array(self.raw_n_list, dtype=np.float32)
@@ -595,28 +665,92 @@ init -5 python:
             
         def event(self, ev, x, y, st):
             import pygame_sdl2 as pygame
-            if not self.mouse_initialized:
-                pygame.mouse.set_visible(False)
-                pygame.event.set_grab(True)
-                pygame.mouse.get_rel() # reset relative delta accumulator
-                self.mouse_initialized = True
-                self.skip_mouse = True
+
+            if TAICHI_DEBUG_CAMERA_INPUT:
+                if ev.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+                    btn = getattr(ev, "button", None)
+                    print(
+                        "[Taichi cam debug] mouse button ev "
+                        f"type={ev.type} button={btn} view_xy=({x:.0f},{y:.0f}) "
+                        f"rmb_down={self.rmb_down} mouse_init={self.mouse_initialized}"
+                    )
+
+            if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 3:
+                self.rmb_down = True
+                raise renpy.IgnoreEvent()
+
+            if ev.type == pygame.MOUSEBUTTONUP and ev.button == 3:
+                self.rmb_down = False
+                raise renpy.IgnoreEvent()
+
+            if self.rmb_down:
+                if not self.mouse_initialized:
+                    pygame.mouse.set_visible(False)
+                    pygame.event.set_grab(True)
+                    pygame.mouse.get_rel()
+                    self.mouse_initialized = True
+                    self.skip_mouse = True
+                    if TAICHI_DEBUG_CAMERA_INPUT:
+                        print("[Taichi cam debug] RMB grab ON")
+            else:
+                if self.mouse_initialized:
+                    pygame.mouse.set_visible(True)
+                    pygame.event.set_grab(False)
+                    self.mouse_initialized = False
+                    self.mouse_dx = 0.0
+                    self.mouse_dy = 0.0
+                    self.input_y = 0.0
+                    self.input_x = 0.0
+                    self.input_r = 0.0
+                    self.input_v = 0.0
+                    self.input_pitch = 0.0
+                    if TAICHI_DEBUG_CAMERA_INPUT:
+                        print("[Taichi cam debug] RMB grab OFF")
                 return
 
-            if ev.type == pygame.MOUSEMOTION and self.mouse_initialized:
+            if ev.type == pygame.MOUSEMOTION:
+                rel = getattr(ev, "rel", (0, 0))
                 if getattr(self, "skip_mouse", False):
                     self.skip_mouse = False
-                    return
-                self.mouse_dx += ev.rel[0]
-                self.mouse_dy += ev.rel[1]
-                return
+                else:
+                    self.mouse_dx += rel[0]
+                    self.mouse_dy += rel[1]
+                if TAICHI_DEBUG_CAMERA_INPUT and self.rmb_down:
+                    now = time.time()
+                    if now - self._debug_cam_last_motion_log > 0.2:
+                        self._debug_cam_last_motion_log = now
+                        print(
+                            "[Taichi cam debug] motion "
+                            f"rel={rel} accum_dx_dy=({self.mouse_dx:.2f},{self.mouse_dy:.2f}) "
+                            f"skip_next={self.skip_mouse}"
+                        )
+                raise renpy.IgnoreEvent()
 
-            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE and self.mouse_initialized:
-                pygame.mouse.set_visible(True)
-                pygame.event.set_grab(False)
-                self.mouse_initialized = False
-                self.mouse_dx = 0.0
-                return
+            if ev.type == pygame.KEYDOWN:
+                if ev.key == pygame.K_w or ev.key == pygame.K_UP: self.input_y = -1.0
+                elif ev.key == pygame.K_s or ev.key == pygame.K_DOWN: self.input_y = 1.0
+                if ev.key == pygame.K_a: self.input_x = 1.0
+                elif ev.key == pygame.K_d: self.input_x = -1.0
+                if ev.key == pygame.K_LEFT: self.input_r = 1.0
+                elif ev.key == pygame.K_RIGHT: self.input_r = -1.0
+                if ev.key == pygame.K_SPACE: self.input_v = 1.0
+                elif ev.key == pygame.K_LCTRL or ev.key == pygame.K_RCTRL: self.input_v = -1.0
+                if ev.key == pygame.K_PAGEUP: self.input_pitch = 1.0
+                elif ev.key == pygame.K_PAGEDOWN: self.input_pitch = -1.0
+                raise renpy.IgnoreEvent()
+
+            if ev.type == pygame.KEYUP:
+                if ev.key == pygame.K_w or ev.key == pygame.K_UP: self.input_y = 0.0
+                elif ev.key == pygame.K_s or ev.key == pygame.K_DOWN: self.input_y = 0.0
+                if ev.key == pygame.K_a: self.input_x = 0.0
+                elif ev.key == pygame.K_d: self.input_x = 0.0
+                if ev.key == pygame.K_LEFT: self.input_r = 0.0
+                elif ev.key == pygame.K_RIGHT: self.input_r = 0.0
+                if ev.key == pygame.K_SPACE: self.input_v = 0.0
+                elif ev.key == pygame.K_LCTRL or ev.key == pygame.K_RCTRL: self.input_v = 0.0
+                if ev.key == pygame.K_PAGEUP: self.input_pitch = 0.0
+                elif ev.key == pygame.K_PAGEDOWN: self.input_pitch = 0.0
+                raise renpy.IgnoreEvent()
 
         def render(self, width, height, st, at):
             current_qmode = getattr(persistent, "stein_quality_mode", 1)
@@ -624,25 +758,10 @@ init -5 python:
                 self.reapply_quality()
                 self.last_qmode = current_qmode
 
-            keys = pygame.key.get_pressed()
-            self.input_y = 0.0
-            self.input_x = 0.0
-            self.input_r = 0.0
-            self.input_v = 0.0
-            self.input_pitch = 0.0
-            if keys[pygame.K_w] or keys[pygame.K_UP]: self.input_y -= 1.0
-            if keys[pygame.K_s] or keys[pygame.K_DOWN]: self.input_y += 1.0
-            if keys[pygame.K_a]: self.input_x += 1.0
-            if keys[pygame.K_d]: self.input_x -= 1.0
-            if keys[pygame.K_LEFT]: self.input_r += 1.0
-            if keys[pygame.K_RIGHT]: self.input_r -= 1.0
-            if keys[pygame.K_SPACE]: self.input_v += 1.0
-            if keys[pygame.K_LCTRL] or keys[pygame.K_RCTRL]: self.input_v -= 1.0
-            if keys[pygame.K_PAGEUP]: self.input_pitch += 1.0
-            if keys[pygame.K_PAGEDOWN]: self.input_pitch -= 1.0
             if self.mouse_initialized:
-                self.input_r += -(self.mouse_dx * self.mouse_sens)
+                self.player_yaw += -(self.mouse_dx * self.mouse_sens)
                 self.player_pitch -= (self.mouse_dy * self.mouse_pitch_sens)
+            
             self.mouse_dx = 0.0
             self.mouse_dy = 0.0
 
@@ -675,10 +794,15 @@ init -5 python:
                 
             full_array = T_pixels.to_numpy()
             active_slice = full_array[:self.res_y, :self.res_x]
-            raw_bytes = active_slice.tobytes()
+            contig_slice = np.ascontiguousarray(active_slice)
+            raw_bytes = contig_slice.tobytes()
             
             pg_surf = pygame.Surface((self.res_x, self.res_y), 0, 32)
-            pg_surf.from_data(raw_bytes)
+            try:
+                pg_surf.from_data(raw_bytes)
+            except Exception as e:
+                print(f"Error in from_data! res_x={self.res_x}, res_y={self.res_y}, array shape={contig_slice.shape}, bytes len={len(raw_bytes)}")
+                raise e
             
             if (width, height) != (self.res_x, self.res_y):
                 pg_surf = pygame.transform.scale(pg_surf, (width, height))
@@ -692,6 +816,19 @@ init -5 python:
             self.frame_count += 1
             if time.time() - self.last_print > 1.0:
                 print(f"[Taichi Engine] Frame: {self.accumulated_ms / max(1, self.frame_count):.2f} ms")
+                if TAICHI_DEBUG_CAMERA_INPUT:
+                    gp_rmb = None
+                    try:
+                        gp_rmb = bool(pygame.mouse.get_pressed()[2])
+                    except Exception as e:
+                        gp_rmb = f"err:{e}"
+                    print(
+                        "[Taichi cam debug] render tick "
+                        f"rmb_down={self.rmb_down} mouse_init={self.mouse_initialized} "
+                        f"pygame_pressed_rmb={gp_rmb} "
+                        f"yaw={self.player_yaw:.4f} pitch={self.player_pitch:.4f} "
+                        f"xyz=({self.player_x:.2f},{self.player_y:.2f},{self.player_z:.2f})"
+                    )
                 self.accumulated_ms = 0.0
                 self.frame_count = 0
                 self.last_print = time.time()
