@@ -107,28 +107,28 @@ init -5 python:
                 if roll != 0.0:
                     cr = math.cos(roll)
                     sr = math.sin(roll)
-                    x_new = v_np[:, 0] * cr - v_np[:, 1] * sr
-                    y_new = v_np[:, 0] * sr + v_np[:, 1] * cr
-                    v_np[:, 0] = x_new
-                    v_np[:, 1] = y_new
+                    x_old = v_np[:, 0].copy()
+                    y_old = v_np[:, 1].copy()
+                    v_np[:, 0] = x_old * cr - y_old * sr
+                    v_np[:, 1] = x_old * sr + y_old * cr
 
                 # Pitch (X axis)
                 if pitch != 0.0:
                     cp = math.cos(pitch)
                     sp = math.sin(pitch)
-                    y_new = v_np[:, 1] * cp - v_np[:, 2] * sp
-                    z_new = v_np[:, 1] * sp + v_np[:, 2] * cp
-                    v_np[:, 1] = y_new
-                    v_np[:, 2] = z_new
+                    y_old = v_np[:, 1].copy()
+                    z_old = v_np[:, 2].copy()
+                    v_np[:, 1] = y_old * cp - z_old * sp
+                    v_np[:, 2] = y_old * sp + z_old * cp
 
                 # Yaw (Y axis)
                 if yaw != 0.0:
                     cy = math.cos(yaw)
                     sy = math.sin(yaw)
-                    x_new = v_np[:, 0] * cy - v_np[:, 2] * sy
-                    z_new = v_np[:, 0] * sy + v_np[:, 2] * cy
-                    v_np[:, 0] = x_new
-                    v_np[:, 2] = z_new
+                    x_old = v_np[:, 0].copy()
+                    z_old = v_np[:, 2].copy()
+                    v_np[:, 0] = x_old * cy - z_old * sy
+                    v_np[:, 2] = x_old * sy + z_old * cy
 
                 v_np[:, 0] += pos[0]
                 v_np[:, 1] += pos[1]

@@ -364,9 +364,13 @@ screen mesh_play():
 label start_mesh_play:
     python:
         store.stein_map_backend = "mesh"
-        store.meshMap = load_mesh_map_json("new_mesh_map.json")
-        if not store.meshMap or "instances" not in store.meshMap:
-            store.meshMap = empty_mesh_map()
+        if getattr(store, "meshMap_dirty", False):
+            save_mesh_map_json(store.meshMap, "new_mesh_map.json")
+            store.meshMap_dirty = False
+        else:
+            store.meshMap = load_mesh_map_json("new_mesh_map.json")
+            if not store.meshMap or "instances" not in store.meshMap:
+                store.meshMap = empty_mesh_map()
 
         SteinContainer.engine = TaichiEngineDisplayable(
             mesh_map=store.meshMap,

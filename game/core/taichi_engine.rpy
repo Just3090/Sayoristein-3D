@@ -60,6 +60,10 @@ init -5 python:
     T_uvs = ti.Vector.field(2, dtype=ti.f32, shape=MAX_VERTS)
     T_indices = ti.field(dtype=ti.i32, shape=MAX_TRIS * 3)
     T_projected = ti.Vector.field(6, dtype=ti.f32, shape=MAX_VERTS)
+    T_tri_aabb = ti.Vector.field(4, dtype=ti.i32, shape=MAX_TRIS)
+    T_tri_area = ti.field(dtype=ti.f32, shape=MAX_TRIS)
+    T_large_tris = ti.field(dtype=ti.i32, shape=MAX_TRIS)
+    T_large_tris_count = ti.field(dtype=ti.i32, shape=())
     global_num_vertices = 0
     global_num_triangles = 0
     
@@ -171,10 +175,9 @@ init -5 python:
             T_zbuffer[j, i] = 1e10
 
     @ti.kernel
-    def taichi_render_3d(res_x: ti.i32, res_y: ti.i32, total_tris: ti.i32):
-        f_res_x = float(res_x)
-        f_res_y = float(res_y)
-
+    def taichi_render_small_tris(res_x: ti.i32, res_y: ti.i32, total_tris: ti.i32):
+        T_large_tris_count[None] = 0
+        
         for t_idx in range(total_tris):
             i0 = T_indices[t_idx * 3]
             i1 = T_indices[t_idx * 3 + 1]
@@ -183,63 +186,131 @@ init -5 python:
             v0 = T_projected[i0]
             v1 = T_projected[i2]
             v2 = T_projected[i1]
-
-            if v0[2] > 0.0 and v1[2] > 0.0 and v2[2] > 0.0:
+            
+            if v0[2] <= 0.0 or v1[2] <= 0.0 or v2[2] <= 0.0:
+                continue
                 
-                if v0[2] < 0.02 and v1[2] < 0.02 and v2[2] < 0.02:
+            if v0[2] < 0.02 and v1[2] < 0.02 and v2[2] < 0.02:
+                continue
+                
+            area = edge_function(v0, v1, v2)
+            if area <= 0.0:
+                continue
+            
+            min_x = ti.max(0, ti.cast(ti.floor(ti.min(ti.min(v0[0], v1[0]), v2[0])), ti.i32))
+            max_x = ti.min(res_x - 1, ti.cast(ti.ceil(ti.max(ti.max(v0[0], v1[0]), v2[0])), ti.i32))
+            min_y = ti.max(0, ti.cast(ti.floor(ti.min(ti.min(v0[1], v1[1]), v2[1])), ti.i32))
+            max_y = ti.min(res_y - 1, ti.cast(ti.ceil(ti.max(ti.max(v0[1], v1[1]), v2[1])), ti.i32))
+            
+            box_w = max_x - min_x
+            box_h = max_y - min_y
+            
+            if box_w < 0 or box_h < 0:
+                continue
+                
+            if box_w * box_h > 10000:
+                idx = ti.atomic_add(T_large_tris_count[None], 1)
+                T_large_tris[idx] = t_idx
+                T_tri_aabb[t_idx] = ti.Vector([min_x, max_x, min_y, max_y])
+                T_tri_area[t_idx] = area
+            else:
+                for px in range(min_x, max_x + 1):
+                    for py in range(min_y, max_y + 1):
+                        p = ti.Vector([float(px), float(py)])
+                        w0 = edge_function(v1, v2, p)
+                        w1 = edge_function(v2, v0, p)
+                        w2 = edge_function(v0, v1, p)
+
+                        if w0 >= 0.0 and w1 >= 0.0 and w2 >= 0.0:
+                            w0_n = w0 / area
+                            w1_n = w1 / area
+                            w2_n = w2 / area
+                            inv_z = w0_n * v0[2] + w1_n * v1[2] + w2_n * v2[2]
+                            z = 1.0 / inv_z
+                            j = res_y - 1 - py
+
+                            if z > 0.1:
+                                old_z = ti.atomic_min(T_zbuffer[j, px], z)
+                                if z <= old_z:
+                                    u_z = w0_n * v0[3] + w1_n * v1[3] + w2_n * v2[3]
+                                    v_z = w0_n * v0[4] + w1_n * v1[4] + w2_n * v2[4]
+                                    tex_u = u_z * z
+                                    tex_v = v_z * z
+                                    final_intensity = w0_n * v0[5] + w1_n * v1[5] + w2_n * v2[5]
+
+                                    u_frac = tex_u - ti.floor(tex_u)
+                                    v_frac = tex_v - ti.floor(tex_v)
+                                    
+                                    tu_idx = ti.cast(u_frac * ti.cast(global_tex_w - 1, ti.f32), ti.i32)
+                                    tv_idx = ti.cast((1.0 - v_frac) * ti.cast(global_tex_h - 1, ti.f32), ti.i32)
+                                    
+                                    color = T_texture_data[tu_idx, tv_idx]
+
+                                    T_pixels[j, px] = [
+                                        ti.cast(ti.cast(color[0], ti.f32) * final_intensity, ti.u8),
+                                        ti.cast(ti.cast(color[1], ti.f32) * final_intensity, ti.u8),
+                                        ti.cast(ti.cast(color[2], ti.f32) * final_intensity, ti.u8),
+                                        ti.cast(255, ti.u8)
+                                    ]
+
+    @ti.kernel
+    def taichi_render_large_tris(res_x: ti.i32, res_y: ti.i32):
+        num_large = T_large_tris_count[None]
+        for px, py in ti.ndrange(res_x, res_y):
+            j = res_y - 1 - py
+            p = ti.Vector([float(px), float(py)])
+            
+            for l_i in range(num_large):
+                t_idx = T_large_tris[l_i]
+                
+                aabb = T_tri_aabb[t_idx]
+                if px < aabb[0] or px > aabb[1] or py < aabb[2] or py > aabb[3]:
                     continue
+                    
+                area = T_tri_area[t_idx]
+                
+                i0 = T_indices[t_idx * 3]
+                i1 = T_indices[t_idx * 3 + 1]
+                i2 = T_indices[t_idx * 3 + 2]
 
-                if (v0[0] < 0.0 and v1[0] < 0.0 and v2[0] < 0.0) or \
-                    (v0[0] > f_res_x and v1[0] > f_res_x and v2[0] > f_res_x) or \
-                    (v0[1] < 0.0 and v1[1] < 0.0 and v2[1] < 0.0) or \
-                    (v0[1] > f_res_y and v1[1] > f_res_y and v2[1] > f_res_y):
-                    continue
+                v0 = T_projected[i0]
+                v1 = T_projected[i2]
+                v2 = T_projected[i1]
+                
+                w0 = edge_function(v1, v2, p)
+                w1 = edge_function(v2, v0, p)
+                w2 = edge_function(v0, v1, p)
+                
+                if w0 >= 0.0 and w1 >= 0.0 and w2 >= 0.0:
+                    w0_n = w0 / area
+                    w1_n = w1 / area
+                    w2_n = w2 / area
+                    inv_z = w0_n * v0[2] + w1_n * v1[2] + w2_n * v2[2]
+                    z = 1.0 / inv_z
+                    
+                    if z > 0.1:
+                        old_z = ti.atomic_min(T_zbuffer[j, px], z)
+                        if z <= old_z:
+                            u_z = w0_n * v0[3] + w1_n * v1[3] + w2_n * v2[3]
+                            v_z = w0_n * v0[4] + w1_n * v1[4] + w2_n * v2[4]
+                            tex_u = u_z * z
+                            tex_v = v_z * z
+                            final_intensity = w0_n * v0[5] + w1_n * v1[5] + w2_n * v2[5]
 
-                area = edge_function(v0, v1, v2)
-                if area > 0.0:
-                    min_x = ti.max(0, ti.cast(ti.floor(ti.min(ti.min(v0[0], v1[0]), v2[0])), ti.i32))
-                    max_x = ti.min(res_x - 1, ti.cast(ti.ceil(ti.max(ti.max(v0[0], v1[0]), v2[0])), ti.i32))
-                    min_y = ti.max(0, ti.cast(ti.floor(ti.min(ti.min(v0[1], v1[1]), v2[1])), ti.i32))
-                    max_y = ti.min(res_y - 1, ti.cast(ti.ceil(ti.max(ti.max(v0[1], v1[1]), v2[1])), ti.i32))
+                            u_frac = tex_u - ti.floor(tex_u)
+                            v_frac = tex_v - ti.floor(tex_v)
+                            
+                            tu_idx = ti.cast(u_frac * ti.cast(global_tex_w - 1, ti.f32), ti.i32)
+                            tv_idx = ti.cast((1.0 - v_frac) * ti.cast(global_tex_h - 1, ti.f32), ti.i32)
+                            
+                            color = T_texture_data[tu_idx, tv_idx]
 
-                    for px in range(min_x, max_x + 1):
-                        for py in range(min_y, max_y + 1):
-                            p = ti.Vector([float(px), float(py)])
-                            w0 = edge_function(v1, v2, p)
-                            w1 = edge_function(v2, v0, p)
-                            w2 = edge_function(v0, v1, p)
-
-                            if w0 >= 0.0 and w1 >= 0.0 and w2 >= 0.0:
-                                w0_n = w0 / area
-                                w1_n = w1 / area
-                                w2_n = w2 / area
-                                inv_z = w0_n * v0[2] + w1_n * v1[2] + w2_n * v2[2]
-                                z = 1.0 / inv_z
-                                j = res_y - 1 - py
-
-                                if z > 0.1:
-                                    old_z = ti.atomic_min(T_zbuffer[j, px], z)
-                                    if z <= old_z:
-                                        u_z = w0_n * v0[3] + w1_n * v1[3] + w2_n * v2[3]
-                                        v_z = w0_n * v0[4] + w1_n * v1[4] + w2_n * v2[4]
-                                        tex_u = u_z * z
-                                        tex_v = v_z * z
-                                        final_intensity = w0_n * v0[5] + w1_n * v1[5] + w2_n * v2[5]
-
-                                        u_frac = tex_u - ti.floor(tex_u)
-                                        v_frac = tex_v - ti.floor(tex_v)
-                                        
-                                        tu_idx = ti.cast(u_frac * ti.cast(global_tex_w - 1, ti.f32), ti.i32)
-                                        tv_idx = ti.cast((1.0 - v_frac) * ti.cast(global_tex_h - 1, ti.f32), ti.i32)
-                                        
-                                        color = T_texture_data[tu_idx, tv_idx]
-
-                                        T_pixels[j, px] =[
-                                            ti.cast(ti.cast(color[0], ti.f32) * final_intensity, ti.u8),
-                                            ti.cast(ti.cast(color[1], ti.f32) * final_intensity, ti.u8),
-                                            ti.cast(ti.cast(color[2], ti.f32) * final_intensity, ti.u8),
-                                            ti.cast(255, ti.u8)
-                                        ]
+                            T_pixels[j, px] = [
+                                ti.cast(ti.cast(color[0], ti.f32) * final_intensity, ti.u8),
+                                ti.cast(ti.cast(color[1], ti.f32) * final_intensity, ti.u8),
+                                ti.cast(ti.cast(color[2], ti.f32) * final_intensity, ti.u8),
+                                ti.cast(255, ti.u8)
+                            ]
 
     
     def _sorted_numeric_keys(d):
@@ -641,7 +712,8 @@ init -5 python:
                     pose.player_x, eye_y, pose.player_z, render_yaw, pose.player_pitch,
                     float(self.res_x), float(self.res_y), scene.num_vertices,
                 )
-                taichi_render_3d(self.res_x, self.res_y, scene.num_triangles)
+                taichi_render_small_tris(self.res_x, self.res_y, scene.num_triangles)
+                taichi_render_large_tris(self.res_x, self.res_y)
 
             full_array = T_pixels.to_numpy()
             active_slice = full_array[:self.res_y, :self.res_x]

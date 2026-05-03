@@ -29,6 +29,7 @@ init python:
         mesh_editor_refresh_engine()
         
     def mesh_editor_refresh_engine():
+        store.meshMap_dirty = True
         if getattr(SteinContainer, "engine", None):
             SteinContainer.engine.load_mesh_map(store.meshMap)
 
