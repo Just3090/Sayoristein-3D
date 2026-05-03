@@ -39,7 +39,7 @@ init -5 python:
             
     MAX_RES_X = 1066
     MAX_RES_Y = 600
-    MAX_TRIS = 500000
+    MAX_TRIS = 2000000
     MAX_VERTS = MAX_TRIS * 3
 
     T_pixels = ti.Vector.field(n=4, dtype=ti.u8, shape=(MAX_RES_Y, MAX_RES_X))
@@ -51,9 +51,51 @@ init -5 python:
     T_projected = ti.Vector.field(6, dtype=ti.f32, shape=MAX_VERTS)
     global_num_vertices = 0
     global_num_triangles = 0
+    
+    global_tex_w = 2048
+    global_tex_h = 2048
+    T_texture_data = ti.Vector.field(3, dtype=ti.u8, shape=(global_tex_w, global_tex_h))
+
+    def load_texture_to_taichi(path):
+        global global_tex_w, global_tex_h 
+        
+        pad_np = np.full((2048, 2048, 3), 200, dtype=np.uint8)
+        
+        if not os.path.exists(path):
+            print(f"Taichi Engine: Texture not found: {path}. Using default gray color.")
+            T_texture_data.from_numpy(pad_np)
+            global_tex_w = 2048
+            global_tex_h = 2048
+            return
+            
+        try:
+            surf = pygame.image.load(path).convert(24) 
+            w, h = surf.get_size()
+            
+            global_tex_w = w
+            global_tex_h = h
+            
+            copy_w = min(w, 2048)
+            copy_h = min(h, 2048)
+            
+            for x in range(copy_w):
+                for y in range(copy_h):
+                    c = surf.get_at((x, y))
+                    pad_np[x, y, 0] = c.r
+                    pad_np[x, y, 1] = c.g
+                    pad_np[x, y, 2] = c.b
+            
+            T_texture_data.from_numpy(pad_np)
+            print(f"Taichi Engine: Loaded texture {path} ({w}x{h})")
+        except Exception as e:
+            print(f"Taichi Engine: Error loading texture {path}: {e}")
+            T_texture_data.from_numpy(pad_np)
+            global_tex_w = 2048
+            global_tex_h = 2048
 
     def taichi_init_texture():
-        return
+        path = os.path.join(config.gamedir, "models", "texture.png")
+        load_texture_to_taichi(path)
 
     @ti.func
     def edge_function(a, b, c):
@@ -154,19 +196,18 @@ init -5 python:
                                         tex_v = v_z * z
                                         final_intensity = w0_n * v0[5] + w1_n * v1[5] + w2_n * v2[5]
 
-                                        tu_abs = ti.abs(tex_u)
-                                        tv_abs = ti.abs(tex_v)
-                                        tu_idx = ti.cast(tu_abs * 255.0, ti.i32) % 256
-                                        tv_idx = ti.cast(tv_abs * 255.0, ti.i32) % 256
-                                        checker = (tu_idx // 32 + tv_idx // 32) % 2
-                                        base = 255.0
-                                        if checker != 0:
-                                            base = 100.0
+                                        u_frac = tex_u - ti.floor(tex_u)
+                                        v_frac = tex_v - ti.floor(tex_v)
+                                        
+                                        tu_idx = ti.cast(u_frac * ti.cast(global_tex_w - 1, ti.f32), ti.i32)
+                                        tv_idx = ti.cast((1.0 - v_frac) * ti.cast(global_tex_h - 1, ti.f32), ti.i32)
+                                        
+                                        color = T_texture_data[tu_idx, tv_idx]
 
                                         T_pixels[j, px] = [
-                                            ti.cast(base * final_intensity, ti.u8),
-                                            ti.cast(base * final_intensity, ti.u8),
-                                            ti.cast(base * final_intensity, ti.u8),
+                                            ti.cast(ti.cast(color[0], ti.f32) * final_intensity, ti.u8),
+                                            ti.cast(ti.cast(color[1], ti.f32) * final_intensity, ti.u8),
+                                            ti.cast(ti.cast(color[2], ti.f32) * final_intensity, ti.u8),
                                             ti.cast(255, ti.u8)
                                         ]
 
@@ -496,7 +537,7 @@ init -5 python:
 
             if self.model_path:
                 if qmode == 0:
-                    self.render_scale = min(self.render_scale, 0.75)
+                    self.render_scale = min(self.render_scale, 1.0)
                 elif qmode == 1:
                     self.render_scale = min(self.render_scale, 0.50)
                 elif qmode == 2:
