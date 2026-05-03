@@ -32,6 +32,8 @@ default stein_inter_round_timer = 0.0
 default stein_sniper_count = 0
 default stein_yuritler_count = 0
 default worldMap = []
+default meshMap = {"version": "1.0", "type": "mesh_map", "instances": []}
+default stein_map_backend = "voxel" # Can be "voxel" or "mesh"
 default exits = []
 default stein_objects = [] # List of (x, y, z, "filename.json")
 
@@ -122,6 +124,59 @@ init python:
         except Exception as e:
             print("Error loading map: " + str(e))
             return {}
+
+    def save_mesh_map_json(mesh_data, name=None):
+        if name is None:
+            name = "mesh_map_{}".format(int(time.time()))
+        if name.endswith(".json"):
+            name = name[:-5]
+
+        save_dir = os.path.join(config.gamedir, "saved_mesh_maps")
+        if not os.path.exists(save_dir):
+            try:
+                os.makedirs(save_dir)
+            except:
+                pass
+
+        filename = name + ".json"
+        full_path = os.path.join(save_dir, filename)
+
+        try:
+            with open(full_path, "w") as f:
+                json.dump(mesh_data, f, indent=4)
+            renpy.notify("Mesh map saved: " + filename)
+            print("Mesh map saved to " + full_path)
+        except Exception as e:
+            renpy.notify("Error saving mesh map!")
+            print("Error saving mesh map: " + str(e))
+
+    def load_mesh_map_json(filename):
+        save_dir = os.path.join(config.gamedir, "saved_mesh_maps")
+        full_path = os.path.join(save_dir, filename)
+        
+        if not os.path.exists(full_path):
+            if os.path.exists(filename):
+                full_path = filename
+            else:
+                print("Mesh map not found: " + full_path)
+                return {"version": "1.0", "type": "mesh_map", "instances": []}
+                
+        try:
+            with open(full_path, "r") as f:
+                data = json.load(f)
+            return data
+        except Exception as e:
+            print("Error loading mesh map: " + str(e))
+            return {"version": "1.0", "type": "mesh_map", "instances": []}
+
+    def get_mesh_map_files():
+        save_dir = os.path.join(config.gamedir, "saved_mesh_maps")
+        files = []
+        if os.path.exists(save_dir):
+            for f in os.listdir(save_dir):
+                if f.endswith(".json"):
+                    files.append(f)
+        return sorted(files)
 
     def load_object_json(filename):
         """
@@ -636,10 +691,13 @@ init python:
         else: # Default to level 1
             level_data = level1_data
 
-        renpy.store.worldMap = level_data["worldMap"]
+        renpy.store.worldMap = level_data.get("worldMap", [])
         if renpy.store.worldMap is None:
             print("reset_stein_state: worldMap was None, initializing empty map.")
             renpy.store.worldMap = {}
+            
+        renpy.store.meshMap = level_data.get("meshMap", {"version": "1.0", "type": "mesh_map", "instances": []})
+        renpy.store.stein_map_backend = level_data.get("stein_map_backend", "voxel")
         
         renpy.store.exits = level_data["exits"]
         renpy.store.player_x = level_data["player_x"]
