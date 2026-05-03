@@ -101,6 +101,9 @@ init -50 python:
         move_out_array = (ctypes.c_double * 2)()
         move_out_ptr = ctypes.addressof(move_out_array)
 
+        raycast_mesh_out_array = (ctypes.c_double * 5)()
+        raycast_mesh_out_ptr = ctypes.addressof(raycast_mesh_out_array)
+
         @staticmethod
         def update_projectiles_native(proj_addr, count, enemy_ptr, num_enemies, player_ptr, dt, map_addr, w, h, layers, min_layer):
             stein_lib.update_projectiles_c(
@@ -156,6 +159,18 @@ init -50 python:
                 move_speed, rot_speed,
                 map_addr, w, h, layers, min_layer
             )
+
+        @staticmethod
+        def raycast_triangles(ro_x, ro_y, ro_z, rd_x, rd_y, rd_z, v_addr, i_addr, num_tris):
+            stein_lib.raycast_triangles_c(
+                ro_x, ro_y, ro_z,
+                rd_x, rd_y, rd_z,
+                v_addr, i_addr, num_tris,
+                SteinWrapper.raycast_mesh_out_ptr
+            )
+            if SteinWrapper.raycast_mesh_out_array[0] > 0.5:
+                return (True, SteinWrapper.raycast_mesh_out_array[1], SteinWrapper.raycast_mesh_out_array[2], SteinWrapper.raycast_mesh_out_array[3], SteinWrapper.raycast_mesh_out_array[4])
+            return (False, 0.0, 0.0, 0.0, 0.0)
 
     stein_lib = None
     library_path = None
@@ -266,6 +281,14 @@ init -50 python:
                 ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int
             ]
             stein_lib.update_player_complete_c.restype = None
+
+            stein_lib.raycast_triangles_c.argtypes = [
+                ctypes.c_double, ctypes.c_double, ctypes.c_double,
+                ctypes.c_double, ctypes.c_double, ctypes.c_double,
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
+                ctypes.c_void_p
+            ]
+            stein_lib.raycast_triangles_c.restype = None
 
             SteinWrapper.stein_lib = stein_lib
 

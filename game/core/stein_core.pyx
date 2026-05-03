@@ -750,3 +750,109 @@ cdef public void update_player_physics_c(
             p.is_grounded = 0
         else:
             pass
+
+cdef public void raycast_triangles_c(
+    double ro_x, double ro_y, double ro_z,
+    double rd_x, double rd_y, double rd_z,
+    size_t vertices_addr,
+    size_t indices_addr,
+    int num_triangles,
+    size_t out_addr
+):
+    cdef float* vertices = <float*>vertices_addr
+    cdef int* indices = <int*>indices_addr
+    cdef double* output = <double*>out_addr
+    
+    # output: [hit(0/1), t, nx, ny, nz]
+    output[0] = 0.0
+    
+    cdef int i, i0, i1, i2
+    cdef double v0x, v0y, v0z
+    cdef double v1x, v1y, v1z
+    cdef double v2x, v2y, v2z
+    cdef double e1x, e1y, e1z
+    cdef double e2x, e2y, e2z
+    cdef double hx, hy, hz
+    cdef double a, f, u, v, t
+    cdef double sx, sy, sz
+    cdef double qx, qy, qz
+    
+    cdef double closest_t = 1e30
+    cdef double best_nx = 0.0
+    cdef double best_ny = 0.0
+    cdef double best_nz = 0.0
+    cdef int hit = 0
+    cdef double len_n = 1.0
+    
+    for i in range(num_triangles):
+        i0 = indices[i * 3]
+        i1 = indices[i * 3 + 1]
+        i2 = indices[i * 3 + 2]
+        
+        v0x = vertices[i0 * 3]
+        v0y = vertices[i0 * 3 + 1]
+        v0z = vertices[i0 * 3 + 2]
+        
+        v1x = vertices[i1 * 3]
+        v1y = vertices[i1 * 3 + 1]
+        v1z = vertices[i1 * 3 + 2]
+        
+        v2x = vertices[i2 * 3]
+        v2y = vertices[i2 * 3 + 1]
+        v2z = vertices[i2 * 3 + 2]
+        
+        e1x = v1x - v0x
+        e1y = v1y - v0y
+        e1z = v1z - v0z
+        
+        e2x = v2x - v0x
+        e2y = v2y - v0y
+        e2z = v2z - v0z
+        
+        hx = rd_y * e2z - rd_z * e2y
+        hy = rd_z * e2x - rd_x * e2z
+        hz = rd_x * e2y - rd_y * e2x
+        
+        a = e1x * hx + e1y * hy + e1z * hz
+        if a > -0.00001 and a < 0.00001:
+            continue
+            
+        f = 1.0 / a
+        sx = ro_x - v0x
+        sy = ro_y - v0y
+        sz = ro_z - v0z
+        
+        u = f * (sx * hx + sy * hy + sz * hz)
+        if u < 0.0 or u > 1.0:
+            continue
+            
+        qx = sy * e1z - sz * e1y
+        qy = sz * e1x - sx * e1z
+        qz = sx * e1y - sy * e1x
+        
+        v = f * (rd_x * qx + rd_y * qy + rd_z * qz)
+        if v < 0.0 or u + v > 1.0:
+            continue
+            
+        t = f * (e2x * qx + e2y * qy + e2z * qz)
+        
+        if t > 0.00001 and t < closest_t:
+            closest_t = t
+            hit = 1
+            # Normal calculation
+            best_nx = e1y * e2z - e1z * e2y
+            best_ny = e1z * e2x - e1x * e2z
+            best_nz = e1x * e2y - e1y * e2x
+            
+            len_n = sqrt(best_nx*best_nx + best_ny*best_ny + best_nz*best_nz)
+            if len_n > 0.00001:
+                best_nx /= len_n
+                best_ny /= len_n
+                best_nz /= len_n
+                
+    if hit:
+        output[0] = 1.0
+        output[1] = closest_t
+        output[2] = best_nx
+        output[3] = best_ny
+        output[4] = best_nz

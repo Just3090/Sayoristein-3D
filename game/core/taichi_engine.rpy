@@ -612,6 +612,9 @@ init -5 python:
             scene.num_triangles = len(i_np) // 3
             global_num_vertices = scene.num_vertices
             global_num_triangles = scene.num_triangles
+            
+            scene.v_np = v_np
+            scene.i_np = i_np
 
             v_np.resize((MAX_VERTS, 3), refcheck=False)
             n_np.resize((MAX_VERTS, 3), refcheck=False)

@@ -237,12 +237,80 @@ init -5 python:
             self.mouse_dy = 0.0
 
             self.player_yaw += self.input_r * self.rot_speed * dt
-            move = self.input_y * self.move_speed * dt
-            strafe = self.input_x * self.move_speed * dt
-            self.player_x += math.cos(self.player_yaw) * move + math.sin(self.player_yaw) * strafe
-            self.player_z += math.sin(self.player_yaw) * move - math.cos(self.player_yaw) * strafe
-
-            self.player_y += self.input_v * self.vertical_speed * dt
+            if self.gameplay:
+                move = self.input_y * self.move_speed * dt
+                strafe = self.input_x * self.move_speed * dt
+                vx = math.cos(self.player_yaw) * move + math.sin(self.player_yaw) * strafe
+                vz = math.sin(self.player_yaw) * move - math.cos(self.player_yaw) * strafe
+                
+                GRAVITY = 25.0
+                self.vel_y = getattr(self, "vel_y", 0.0)
+                
+                if self.input_v > 0.5 and getattr(self, "is_grounded", False):
+                    self.vel_y = 8.0
+                    self.is_grounded = False
+                
+                self.vel_y -= GRAVITY * dt
+                vy = self.vel_y * dt
+                
+                player_r = 0.3
+                
+                scene = getattr(self, "scene", None)
+                if scene and getattr(scene, "v_np", None) is not None:
+                    v_ptr = scene.v_np.ctypes.data
+                    i_ptr = scene.i_np.ctypes.data
+                    num_tris = scene.num_triangles
+                    
+                    import sys
+                    stein = sys.modules.get("stein_core")
+                    if stein:
+                        # Ground Check
+                        floor_hit, floor_t, fnx, fny, fnz = stein.raycast_triangles(
+                            self.player_x, self.player_y + 0.5, self.player_z,
+                            0.0, -1.0, 0.0,
+                            v_ptr, i_ptr, num_tris
+                        )
+                        
+                        self.is_grounded = False
+                        if floor_hit and floor_t <= 0.55 and self.vel_y <= 0:
+                            self.player_y = (self.player_y + 0.5) - floor_t
+                            self.vel_y = 0.0
+                            self.is_grounded = True
+                            vy = 0.0
+                        
+                        # Fallback void bounds
+                        if self.player_y < -50.0:
+                            self.player_y = 10.0
+                            self.vel_y = 0.0
+                        
+                        # Wall Collision
+                        if abs(vx) > 0.0001 or abs(vz) > 0.0001:
+                            vlen = math.sqrt(vx*vx + vz*vz)
+                            ndx = vx / vlen
+                            ndz = vz / vlen
+                            
+                            for h_off in (0.3, 1.0, 1.5):
+                                wh_hit, wt, wnx, wny, wnz = stein.raycast_triangles(
+                                    self.player_x, self.player_y + h_off, self.player_z,
+                                    ndx, 0.0, ndz,
+                                    v_ptr, i_ptr, num_tris
+                                )
+                                if wh_hit and wt < player_r and abs(wny) < 0.7:
+                                    dot = vx * wnx + vz * wnz
+                                    if dot < 0:
+                                        vx -= dot * wnx
+                                        vz -= dot * wnz
+                        
+                self.player_x += vx
+                self.player_y += vy
+                self.player_z += vz
+                
+            else:
+                move = self.input_y * self.move_speed * dt
+                strafe = self.input_x * self.move_speed * dt
+                self.player_x += math.cos(self.player_yaw) * move + math.sin(self.player_yaw) * strafe
+                self.player_z += math.sin(self.player_yaw) * move - math.cos(self.player_yaw) * strafe
+                self.player_y += self.input_v * self.vertical_speed * dt
             self.player_pitch += self.input_pitch * self.pitch_speed * dt
             max_pitch = 1.20
             if self.player_pitch > max_pitch:
