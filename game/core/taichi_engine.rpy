@@ -104,9 +104,15 @@ init -5 python:
             global_tex_w = 2048
             global_tex_h = 2048
 
+    _taichi_texture_loaded = False
+
     def taichi_init_texture():
+        global _taichi_texture_loaded
+        if _taichi_texture_loaded:
+            return
         path = os.path.join(config.gamedir, "models", "texture.png")
         load_texture_to_taichi(path)
+        _taichi_texture_loaded = True
 
     @ti.func
     def edge_function(a, b, c):
@@ -409,10 +415,41 @@ init -5 python:
             return None
         return i - 1 if i > 0 else count + i
 
+    _global_obj_geometry_cache = {}
+
     def get_obj_geometry(obj_path, scale=1.0):
         if not obj_path or (not os.path.exists(obj_path)):
             print(f"Sayoristein: OBJ not present: {obj_path}")
             return [], [], [], []
+
+        cache_key = (obj_path, scale)
+        if cache_key in _global_obj_geometry_cache:
+            c_v, c_n, c_u, c_i = _global_obj_geometry_cache[cache_key]
+            return list(c_v), list(c_n), list(c_u), list(c_i)
+
+        npz_path = obj_path + ".npz"
+        if os.path.exists(npz_path) and os.path.exists(obj_path):
+            if os.path.getmtime(npz_path) >= os.path.getmtime(obj_path):
+                try:
+                    data = np.load(npz_path)
+                    v_np = data["v"]
+                    n_list = data["n"].tolist()
+                    u_list = data["u"].tolist()
+                    i_list = data["i"].tolist()
+                    
+                    if scale != 1.0:
+                        min_v = v_np.min(axis=0)
+                        max_v = v_np.max(axis=0)
+                        center = (min_v + max_v) * 0.5
+                        v_np[:, 0] = (v_np[:, 0] - center[0]) * scale
+                        v_np[:, 1] = (v_np[:, 1] - min_v[1]) * scale
+                        v_np[:, 2] = (v_np[:, 2] - center[2]) * scale
+                    
+                    v_list_final = v_np.tolist()
+                    _global_obj_geometry_cache[cache_key] = (v_list_final, n_list, u_list, i_list)
+                    return list(v_list_final), list(n_list), list(u_list), list(i_list)
+                except Exception as e:
+                    print(f"Sayoristein: Failed to load {npz_path}: {e}")
 
         positions = []
         texcoords = []
@@ -482,6 +519,14 @@ init -5 python:
             return [], [], [], []
 
         v_np = np.array(v_list, dtype=np.float32)
+        n_np = np.array(n_list, dtype=np.float32)
+        u_np = np.array(u_list, dtype=np.float32)
+        i_np = np.array(i_list, dtype=np.int32)
+        try:
+            np.savez_compressed(npz_path, v=v_np, n=n_np, u=u_np, i=i_np)
+        except Exception as e:
+            print(f"Sayoristein: Failed to save {npz_path}: {e}")
+
         min_v = v_np.min(axis=0)
         max_v = v_np.max(axis=0)
         center = (min_v + max_v) * 0.5
@@ -490,7 +535,10 @@ init -5 python:
         v_np[:, 1] = (v_np[:, 1] - min_v[1]) * scale
         v_np[:, 2] = (v_np[:, 2] - center[2]) * scale
         
-        return v_np.tolist(), n_list, u_list, i_list
+        v_list_final = v_np.tolist()
+        _global_obj_geometry_cache[cache_key] = (v_list_final, n_list, u_list, i_list)
+        
+        return list(v_list_final), list(n_list), list(u_list), list(i_list)
 
     TAICHI_DEBUG_CAMERA_INPUT = False
 
