@@ -155,6 +155,9 @@ init -5 python:
 
     @ti.kernel
     def taichi_render_3d(res_x: ti.i32, res_y: ti.i32, total_tris: ti.i32):
+        f_res_x = float(res_x)
+        f_res_y = float(res_y)
+
         for t_idx in range(total_tris):
             i0 = T_indices[t_idx * 3]
             i1 = T_indices[t_idx * 3 + 1]
@@ -165,6 +168,16 @@ init -5 python:
             v2 = T_projected[i1]
 
             if v0[2] > 0.0 and v1[2] > 0.0 and v2[2] > 0.0:
+                
+                if v0[2] < 0.02 and v1[2] < 0.02 and v2[2] < 0.02:
+                    continue
+
+                if (v0[0] < 0.0 and v1[0] < 0.0 and v2[0] < 0.0) or \
+                    (v0[0] > f_res_x and v1[0] > f_res_x and v2[0] > f_res_x) or \
+                    (v0[1] < 0.0 and v1[1] < 0.0 and v2[1] < 0.0) or \
+                    (v0[1] > f_res_y and v1[1] > f_res_y and v2[1] > f_res_y):
+                    continue
+
                 area = edge_function(v0, v1, v2)
                 if area > 0.0:
                     min_x = ti.max(0, ti.cast(ti.floor(ti.min(ti.min(v0[0], v1[0]), v2[0])), ti.i32))
@@ -204,7 +217,7 @@ init -5 python:
                                         
                                         color = T_texture_data[tu_idx, tv_idx]
 
-                                        T_pixels[j, px] = [
+                                        T_pixels[j, px] =[
                                             ti.cast(ti.cast(color[0], ti.f32) * final_intensity, ti.u8),
                                             ti.cast(ti.cast(color[1], ti.f32) * final_intensity, ti.u8),
                                             ti.cast(ti.cast(color[2], ti.f32) * final_intensity, ti.u8),
