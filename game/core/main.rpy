@@ -125,6 +125,72 @@ init python:
             print("Error loading map: " + str(e))
             return {}
 
+    MESH_MAP_SCHEMA_VERSION = "1.0"
+
+    def empty_mesh_map():
+        # rotation in degrees, order [yaw, pitch, roll]
+        # obj_path is relative to game/models/
+        return {"version": MESH_MAP_SCHEMA_VERSION, "type": "mesh_map", "instances": []}
+
+    def validate_mesh_map(data):
+        clean_data = empty_mesh_map()
+        errors = []
+        warnings = []
+        
+        if not hasattr(data, "get"):
+            errors.append("Map data is not a dictionary. Got: {}".format(type(data)))
+            return clean_data, errors, warnings
+            
+        if data.get("type") != "mesh_map":
+            errors.append("Invalid map type. Expected 'mesh_map'.")
+            
+        version = data.get("version", "1.0")
+        if version != MESH_MAP_SCHEMA_VERSION:
+            warnings.append("Unknown map version: {}".format(version))
+            clean_data["version"] = version
+            
+        instances = data.get("instances", [])
+        if not hasattr(instances, "__iter__") or hasattr(instances, "keys"):
+            errors.append("instances is not a valid list.")
+            return clean_data, errors, warnings
+            
+        for i, inst in enumerate(instances):
+            if not hasattr(inst, "get"):
+                warnings.append("Instance {} is not a dict, skipping.".format(i))
+                continue
+                
+            obj_path = inst.get("obj_path", "")
+            if not obj_path or not isinstance(obj_path, str):
+                warnings.append("Instance {} missing valid 'obj_path', skipping.".format(i))
+                continue
+                
+            full_path = os.path.join(config.gamedir, "models", obj_path)
+            if not os.path.exists(full_path):
+                errors.append("Path does not exist: models/{}".format(obj_path))
+                
+            clean_inst = {
+                "obj_path": obj_path,
+                "position": [0.0, 0.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+                "collision_enabled": bool(inst.get("collision_enabled", True)),
+                "visible": bool(inst.get("visible", True))
+            }
+            
+            for key in ["position", "rotation", "scale"]:
+                val = inst.get(key)
+                try:
+                    if len(val) == 3 and not hasattr(val, "keys"):
+                        clean_inst[key] = [float(val[0]), float(val[1]), float(val[2])]
+                    else:
+                        warnings.append("Instance {} has missing/malformed {}, using defaults.".format(i, key))
+                except (ValueError, TypeError, KeyError, IndexError, AttributeError):
+                    warnings.append("Instance {} has missing/malformed {}, using defaults.".format(i, key))
+                    
+            clean_data["instances"].append(clean_inst)
+            
+        return clean_data, errors, warnings
+
     def save_mesh_map_json(mesh_data, name=None):
         if name is None:
             name = "mesh_map_{}".format(int(time.time()))
@@ -142,13 +208,32 @@ init python:
         full_path = os.path.join(save_dir, filename)
 
         try:
+            clean_data, errors, warnings = validate_mesh_map(mesh_data)
+            if errors:
+                renpy.notify("Error: Map has fatal errors, cannot save.")
+                print("Cannot save mesh map due to errors:", errors)
+                return
             with open(full_path, "w") as f:
-                json.dump(mesh_data, f, indent=4)
+                json.dump(clean_data, f, indent=4)
             renpy.notify("Mesh map saved: " + filename)
             print("Mesh map saved to " + full_path)
         except Exception as e:
             renpy.notify("Error saving mesh map!")
             print("Error saving mesh map: " + str(e))
+
+    def delete_mesh_map_json(name):
+        if name.endswith(".json"):
+            name = name[:-5]
+        save_dir = os.path.join(config.gamedir, "saved_mesh_maps")
+        filename = name + ".json"
+        full_path = os.path.join(save_dir, filename)
+        if os.path.exists(full_path):
+            try:
+                os.remove(full_path)
+                renpy.notify("Map deleted.")
+            except Exception as e:
+                renpy.notify("Error deleting map!")
+                print("Error deleting map: " + str(e))
 
     def load_mesh_map_json(filename):
         save_dir = os.path.join(config.gamedir, "saved_mesh_maps")
@@ -159,15 +244,21 @@ init python:
                 full_path = filename
             else:
                 print("Mesh map not found: " + full_path)
-                return {"version": "1.0", "type": "mesh_map", "instances": []}
+                return empty_mesh_map()
                 
         try:
             with open(full_path, "r") as f:
                 data = json.load(f)
-            return data
+            clean_data, errors, warnings = validate_mesh_map(data)
+            if errors:
+                print("Errors loading mesh map: {}".format(errors))
+            if warnings:
+                renpy.notify("Map loaded with warnings.")
+                print("Warnings loading mesh map: {}".format(warnings))
+            return clean_data
         except Exception as e:
             print("Error loading mesh map: " + str(e))
-            return {"version": "1.0", "type": "mesh_map", "instances": []}
+            return empty_mesh_map()
 
     def get_mesh_map_files():
         save_dir = os.path.join(config.gamedir, "saved_mesh_maps")
@@ -707,7 +798,7 @@ init python:
             print("reset_stein_state: worldMap was None, initializing empty map.")
             renpy.store.worldMap = {}
             
-        renpy.store.meshMap = level_data.get("meshMap", {"version": "1.0", "type": "mesh_map", "instances": []})
+        renpy.store.meshMap = level_data.get("meshMap", empty_mesh_map())
         renpy.store.stein_map_backend = level_data.get("stein_map_backend", "voxel")
         
         renpy.store.exits = level_data["exits"]
