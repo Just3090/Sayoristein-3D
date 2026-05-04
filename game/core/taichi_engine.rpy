@@ -705,7 +705,7 @@ init -5 python:
                 self.reapply_quality(scene)
 
             if scene.num_vertices > 0:
-                eye_y = pose.player_y + 0.6
+                eye_y = pose.player_y + 1.7
                 render_yaw = pose.player_yaw + (math.pi * 0.5)
                 taichi_clear_buffers(self.res_x, self.res_y)
                 taichi_process_vertices(
