@@ -59,10 +59,12 @@ init -5 python:
     T_normals = ti.Vector.field(3, dtype=ti.f32, shape=MAX_VERTS)
     T_uvs = ti.Vector.field(2, dtype=ti.f32, shape=MAX_VERTS)
     T_indices = ti.field(dtype=ti.i32, shape=MAX_TRIS * 3)
-    T_projected = ti.Vector.field(6, dtype=ti.f32, shape=MAX_VERTS)
-    T_tri_aabb = ti.Vector.field(4, dtype=ti.i32, shape=MAX_TRIS)
-    T_tri_area = ti.field(dtype=ti.f32, shape=MAX_TRIS)
-    T_large_tris = ti.field(dtype=ti.i32, shape=MAX_TRIS)
+    T_cam_space_verts = ti.Vector.field(6, dtype=ti.f32, shape=MAX_VERTS)
+    T_render_tris = ti.Vector.field(6, dtype=ti.f32, shape=MAX_TRIS * 6)
+    T_render_tris_count = ti.field(dtype=ti.i32, shape=())
+    T_tri_aabb = ti.Vector.field(4, dtype=ti.i32, shape=MAX_TRIS * 2)
+    T_tri_area = ti.field(dtype=ti.f32, shape=MAX_TRIS * 2)
+    T_large_tris = ti.field(dtype=ti.i32, shape=MAX_TRIS * 2)
     T_large_tris_count = ti.field(dtype=ti.i32, shape=())
     global_num_vertices = 0
     global_num_triangles = 0
@@ -156,12 +158,94 @@ init -5 python:
             py = 0.0
             inv_z = 0.0
             
-            if rz > 0.1:
-                inv_z = 1.0 / rz
-                px = rx * fov * inv_z + res_x * 0.5
-                py = ry * fov * inv_z + res_y * 0.5
+            T_cam_space_verts[i] = ti.Vector([rx, ry, rz, u_v[0], u_v[1], intensity])
+
+    @ti.kernel
+    def taichi_clip_triangles(res_x: ti.f32, res_y: ti.f32, total_tris: ti.i32):
+        T_render_tris_count[None] = 0
+        fov = res_y * 0.8
+        near = 0.1
+        
+        for t_idx in range(total_tris):
+            i0 = T_indices[t_idx * 3]
+            i1 = T_indices[t_idx * 3 + 1]
+            i2 = T_indices[t_idx * 3 + 2]
             
-            T_projected[i] = ti.Vector([px, py, inv_z, u_v[0] * inv_z, u_v[1] * inv_z, intensity])
+            v0 = T_cam_space_verts[i0]
+            v1 = T_cam_space_verts[i2]
+            v2 = T_cam_space_verts[i1]
+            
+            in_count = 0
+            if v0[2] >= near: in_count += 1
+            if v1[2] >= near: in_count += 1
+            if v2[2] >= near: in_count += 1
+            
+            if in_count == 3:
+                idx = ti.atomic_add(T_render_tris_count[None], 1)
+                base = idx * 3
+                
+                inv_z0 = 1.0 / v0[2]; px0 = v0[0] * fov * inv_z0 + res_x * 0.5; py0 = v0[1] * fov * inv_z0 + res_y * 0.5
+                inv_z1 = 1.0 / v1[2]; px1 = v1[0] * fov * inv_z1 + res_x * 0.5; py1 = v1[1] * fov * inv_z1 + res_y * 0.5
+                inv_z2 = 1.0 / v2[2]; px2 = v2[0] * fov * inv_z2 + res_x * 0.5; py2 = v2[1] * fov * inv_z2 + res_y * 0.5
+                
+                T_render_tris[base] = ti.Vector([px0, py0, inv_z0, v0[3] * inv_z0, v0[4] * inv_z0, v0[5]])
+                T_render_tris[base+1] = ti.Vector([px1, py1, inv_z1, v1[3] * inv_z1, v1[4] * inv_z1, v1[5]])
+                T_render_tris[base+2] = ti.Vector([px2, py2, inv_z2, v2[3] * inv_z2, v2[4] * inv_z2, v2[5]])
+            
+            elif in_count == 1:
+                in_v = v0; out1 = v1; out2 = v2
+                if v1[2] >= near:
+                    in_v = v1; out1 = v2; out2 = v0
+                elif v2[2] >= near:
+                    in_v = v2; out1 = v0; out2 = v1
+                
+                t1 = (near - in_v[2]) / (out1[2] - in_v[2])
+                t2 = (near - in_v[2]) / (out2[2] - in_v[2])
+                
+                new_v1 = in_v + t1 * (out1 - in_v)
+                new_v2 = in_v + t2 * (out2 - in_v)
+                
+                idx = ti.atomic_add(T_render_tris_count[None], 1)
+                base = idx * 3
+                
+                inv_z0 = 1.0 / in_v[2]; px0 = in_v[0] * fov * inv_z0 + res_x * 0.5; py0 = in_v[1] * fov * inv_z0 + res_y * 0.5
+                inv_z1 = 1.0 / new_v1[2]; px1 = new_v1[0] * fov * inv_z1 + res_x * 0.5; py1 = new_v1[1] * fov * inv_z1 + res_y * 0.5
+                inv_z2 = 1.0 / new_v2[2]; px2 = new_v2[0] * fov * inv_z2 + res_x * 0.5; py2 = new_v2[1] * fov * inv_z2 + res_y * 0.5
+                
+                T_render_tris[base] = ti.Vector([px0, py0, inv_z0, in_v[3] * inv_z0, in_v[4] * inv_z0, in_v[5]])
+                T_render_tris[base+1] = ti.Vector([px1, py1, inv_z1, new_v1[3] * inv_z1, new_v1[4] * inv_z1, new_v1[5]])
+                T_render_tris[base+2] = ti.Vector([px2, py2, inv_z2, new_v2[3] * inv_z2, new_v2[4] * inv_z2, new_v2[5]])
+            
+            elif in_count == 2:
+                # two vertices inside, one is outside
+                out_v = v0; in1 = v1; in2 = v2
+                if v1[2] < near:
+                    out_v = v1; in1 = v2; in2 = v0
+                elif v2[2] < near:
+                    out_v = v2; in1 = v0; in2 = v1
+                
+                t1 = (near - in1[2]) / (out_v[2] - in1[2])
+                t2 = (near - in2[2]) / (out_v[2] - in2[2])
+                
+                new_v1 = in1 + t1 * (out_v - in1)
+                new_v2 = in2 + t2 * (out_v - in2)
+                
+                idx = ti.atomic_add(T_render_tris_count[None], 2)
+                base1 = idx * 3
+                base2 = (idx + 1) * 3
+                
+                inv_z0 = 1.0 / in1[2]; px0 = in1[0] * fov * inv_z0 + res_x * 0.5; py0 = in1[1] * fov * inv_z0 + res_y * 0.5
+                inv_z1 = 1.0 / new_v1[2]; px1 = new_v1[0] * fov * inv_z1 + res_x * 0.5; py1 = new_v1[1] * fov * inv_z1 + res_y * 0.5
+                inv_z2 = 1.0 / in2[2]; px2 = in2[0] * fov * inv_z2 + res_x * 0.5; py2 = in2[1] * fov * inv_z2 + res_y * 0.5
+                inv_z3 = 1.0 / new_v2[2]; px3 = new_v2[0] * fov * inv_z3 + res_x * 0.5; py3 = new_v2[1] * fov * inv_z3 + res_y * 0.5
+                
+                T_render_tris[base1]   = ti.Vector([px0, py0, inv_z0, in1[3] * inv_z0, in1[4] * inv_z0, in1[5]])
+                T_render_tris[base1+1] = ti.Vector([px2, py2, inv_z2, in2[3] * inv_z2, in2[4] * inv_z2, in2[5]])
+                T_render_tris[base1+2] = ti.Vector([px1, py1, inv_z1, new_v1[3] * inv_z1, new_v1[4] * inv_z1, new_v1[5]])
+                
+                T_render_tris[base2]   = ti.Vector([px1, py1, inv_z1, new_v1[3] * inv_z1, new_v1[4] * inv_z1, new_v1[5]])
+                T_render_tris[base2+1] = ti.Vector([px2, py2, inv_z2, in2[3] * inv_z2, in2[4] * inv_z2, in2[5]])
+                T_render_tris[base2+2] = ti.Vector([px3, py3, inv_z3, new_v2[3] * inv_z3, new_v2[4] * inv_z3, new_v2[5]])
 
     @ti.kernel
     def taichi_clear_buffers(res_x: ti.i32, res_y: ti.i32):
@@ -175,24 +259,14 @@ init -5 python:
             T_zbuffer[j, i] = 1e10
 
     @ti.kernel
-    def taichi_render_small_tris(res_x: ti.i32, res_y: ti.i32, total_tris: ti.i32):
+    def taichi_render_small_tris(res_x: ti.i32, res_y: ti.i32):
         T_large_tris_count[None] = 0
         
-        for t_idx in range(total_tris):
-            i0 = T_indices[t_idx * 3]
-            i1 = T_indices[t_idx * 3 + 1]
-            i2 = T_indices[t_idx * 3 + 2]
-
-            v0 = T_projected[i0]
-            v1 = T_projected[i2]
-            v2 = T_projected[i1]
+        for t_idx in range(T_render_tris_count[None]):
+            v0 = T_render_tris[t_idx * 3]
+            v1 = T_render_tris[t_idx * 3 + 1]
+            v2 = T_render_tris[t_idx * 3 + 2]
             
-            if v0[2] <= 0.0 or v1[2] <= 0.0 or v2[2] <= 0.0:
-                continue
-                
-            if v0[2] < 0.02 and v1[2] < 0.02 and v2[2] < 0.02:
-                continue
-                
             area = edge_function(v0, v1, v2)
             if area <= 0.0:
                 continue
@@ -229,7 +303,7 @@ init -5 python:
                             z = 1.0 / inv_z
                             j = res_y - 1 - py
 
-                            if z > 0.1:
+                            if z > 0.05:
                                 old_z = ti.atomic_min(T_zbuffer[j, px], z)
                                 if z <= old_z:
                                     u_z = w0_n * v0[3] + w1_n * v1[3] + w2_n * v2[3]
@@ -269,13 +343,9 @@ init -5 python:
                     
                 area = T_tri_area[t_idx]
                 
-                i0 = T_indices[t_idx * 3]
-                i1 = T_indices[t_idx * 3 + 1]
-                i2 = T_indices[t_idx * 3 + 2]
-
-                v0 = T_projected[i0]
-                v1 = T_projected[i2]
-                v2 = T_projected[i1]
+                v0 = T_render_tris[t_idx * 3]
+                v1 = T_render_tris[t_idx * 3 + 1]
+                v2 = T_render_tris[t_idx * 3 + 2]
                 
                 w0 = edge_function(v1, v2, p)
                 w1 = edge_function(v2, v0, p)
@@ -288,7 +358,7 @@ init -5 python:
                     inv_z = w0_n * v0[2] + w1_n * v1[2] + w2_n * v2[2]
                     z = 1.0 / inv_z
                     
-                    if z > 0.1:
+                    if z > 0.05:
                         old_z = ti.atomic_min(T_zbuffer[j, px], z)
                         if z <= old_z:
                             u_z = w0_n * v0[3] + w1_n * v1[3] + w2_n * v2[3]
@@ -712,7 +782,8 @@ init -5 python:
                     pose.player_x, eye_y, pose.player_z, render_yaw, pose.player_pitch,
                     float(self.res_x), float(self.res_y), scene.num_vertices,
                 )
-                taichi_render_small_tris(self.res_x, self.res_y, scene.num_triangles)
+                taichi_clip_triangles(float(self.res_x), float(self.res_y), scene.num_triangles)
+                taichi_render_small_tris(self.res_x, self.res_y)
                 taichi_render_large_tris(self.res_x, self.res_y)
 
             full_array = T_pixels.to_numpy()
