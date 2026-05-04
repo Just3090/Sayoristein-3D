@@ -52,15 +52,16 @@ init -5 python:
     MAX_RES_Y = 1080
     MAX_TRIS = 2000000
     MAX_VERTS = MAX_TRIS * 3
+    MAX_TEXTURES = 64
 
     T_pixels = ti.Vector.field(n=4, dtype=ti.u8, shape=(MAX_RES_Y, MAX_RES_X))
     T_zbuffer = ti.field(dtype=ti.f32, shape=(MAX_RES_Y, MAX_RES_X))
     T_vertices = ti.Vector.field(3, dtype=ti.f32, shape=MAX_VERTS)
     T_normals = ti.Vector.field(3, dtype=ti.f32, shape=MAX_VERTS)
-    T_uvs = ti.Vector.field(2, dtype=ti.f32, shape=MAX_VERTS)
+    T_uvs = ti.Vector.field(3, dtype=ti.f32, shape=MAX_VERTS)
     T_indices = ti.field(dtype=ti.i32, shape=MAX_TRIS * 3)
-    T_cam_space_verts = ti.Vector.field(6, dtype=ti.f32, shape=MAX_VERTS)
-    T_render_tris = ti.Vector.field(6, dtype=ti.f32, shape=MAX_TRIS * 6)
+    T_cam_space_verts = ti.Vector.field(7, dtype=ti.f32, shape=MAX_VERTS)
+    T_render_tris = ti.Vector.field(7, dtype=ti.f32, shape=MAX_TRIS * 6)
     T_render_tris_count = ti.field(dtype=ti.i32, shape=())
     T_tri_aabb = ti.Vector.field(4, dtype=ti.i32, shape=MAX_TRIS * 2)
     T_tri_area = ti.field(dtype=ti.f32, shape=MAX_TRIS * 2)
@@ -71,44 +72,68 @@ init -5 python:
     
     global_tex_w = 2048
     global_tex_h = 2048
-    T_texture_data = ti.Vector.field(3, dtype=ti.u8, shape=(global_tex_w, global_tex_h))
+    T_texture_data = ti.Vector.field(3, dtype=ti.u8, shape=(MAX_TEXTURES, global_tex_w, global_tex_h))
+    
+    init_tex_field = np.full((MAX_TEXTURES, global_tex_w, global_tex_h, 3), 200, dtype=np.uint8)
+    T_texture_data.from_numpy(init_tex_field)
+
+    _texture_registry = {}
+    _next_tex_id = 0
+
+    def get_fallback_texture_id():
+        global _taichi_texture_loaded
+        fallback_path = os.path.join(config.gamedir, "models", "texture.png")
+        if fallback_path not in _texture_registry:
+            load_texture_to_taichi(fallback_path)
+            _taichi_texture_loaded = True
+        return _texture_registry.get(fallback_path, 0)
 
     def load_texture_to_taichi(path):
-        global global_tex_w, global_tex_h 
+        global global_tex_w, global_tex_h, _next_tex_id
         
-        pad_np = np.full((2048, 2048, 3), 200, dtype=np.uint8)
+        if path in _texture_registry:
+            return _texture_registry[path]
+            
+        if _next_tex_id >= MAX_TEXTURES:
+            print(f"Taichi Engine: Maximum number of textures ({MAX_TEXTURES}) reached. Cannot load {path}.")
+            return 0
+            
+        tex_id = _next_tex_id
+        _next_tex_id += 1
+        _texture_registry[path] = tex_id
         
         if not os.path.exists(path):
             print(f"Taichi Engine: Texture not found: {path}. Using default gray color.")
-            T_texture_data.from_numpy(pad_np)
-            global_tex_w = 2048
-            global_tex_h = 2048
-            return
+            return tex_id
             
         try:
             surf = pygame.image.load(path).convert(24) 
             w, h = surf.get_size()
             
-            global_tex_w = w
-            global_tex_h = h
+            if w != 2048 or h != 2048:
+                surf = pygame.transform.scale(surf, (2048, 2048))
+                w, h = 2048, 2048
             
-            copy_w = min(w, 2048)
-            copy_h = min(h, 2048)
+            try:
+                tex_data = pygame.image.tostring(surf, "RGB")
+                tex_np = np.frombuffer(tex_data, dtype=np.uint8).reshape((h, w, 3))
+                tex_np = np.transpose(tex_np, (1, 0, 2))
+            except Exception:
+                tex_np = np.zeros((w, h, 3), dtype=np.uint8)
+                for x in range(w):
+                    for y in range(h):
+                        c = surf.get_at((x, y))
+                        tex_np[x, y] = [c.r, c.g, c.b]
             
-            for x in range(copy_w):
-                for y in range(copy_h):
-                    c = surf.get_at((x, y))
-                    pad_np[x, y, 0] = c.r
-                    pad_np[x, y, 1] = c.g
-                    pad_np[x, y, 2] = c.b
+            full_tex_np = T_texture_data.to_numpy()
+            full_tex_np[tex_id] = tex_np
+            T_texture_data.from_numpy(full_tex_np)
             
-            T_texture_data.from_numpy(pad_np)
-            print(f"Taichi Engine: Loaded texture {path} ({w}x{h})")
+            print(f"Taichi Engine: Loaded texture {path} ({w}x{h}) at slot {tex_id}")
+            return tex_id
         except Exception as e:
             print(f"Taichi Engine: Error loading texture {path}: {e}")
-            T_texture_data.from_numpy(pad_np)
-            global_tex_w = 2048
-            global_tex_h = 2048
+            return tex_id
 
     _taichi_texture_loaded = False
 
@@ -116,9 +141,7 @@ init -5 python:
         global _taichi_texture_loaded
         if _taichi_texture_loaded:
             return
-        path = os.path.join(config.gamedir, "models", "texture.png")
-        load_texture_to_taichi(path)
-        _taichi_texture_loaded = True
+        get_fallback_texture_id()
 
     @ti.func
     def edge_function(a, b, c):
@@ -158,7 +181,7 @@ init -5 python:
             py = 0.0
             inv_z = 0.0
             
-            T_cam_space_verts[i] = ti.Vector([rx, ry, rz, u_v[0], u_v[1], intensity])
+            T_cam_space_verts[i] = ti.Vector([rx, ry, rz, u_v[0], u_v[1], intensity, u_v[2]])
 
     @ti.kernel
     def taichi_clip_triangles(res_x: ti.f32, res_y: ti.f32, total_tris: ti.i32):
@@ -188,9 +211,9 @@ init -5 python:
                 inv_z1 = 1.0 / v1[2]; px1 = v1[0] * fov * inv_z1 + res_x * 0.5; py1 = v1[1] * fov * inv_z1 + res_y * 0.5
                 inv_z2 = 1.0 / v2[2]; px2 = v2[0] * fov * inv_z2 + res_x * 0.5; py2 = v2[1] * fov * inv_z2 + res_y * 0.5
                 
-                T_render_tris[base] = ti.Vector([px0, py0, inv_z0, v0[3] * inv_z0, v0[4] * inv_z0, v0[5]])
-                T_render_tris[base+1] = ti.Vector([px1, py1, inv_z1, v1[3] * inv_z1, v1[4] * inv_z1, v1[5]])
-                T_render_tris[base+2] = ti.Vector([px2, py2, inv_z2, v2[3] * inv_z2, v2[4] * inv_z2, v2[5]])
+                T_render_tris[base] = ti.Vector([px0, py0, inv_z0, v0[3] * inv_z0, v0[4] * inv_z0, v0[5], v0[6]])
+                T_render_tris[base+1] = ti.Vector([px1, py1, inv_z1, v1[3] * inv_z1, v1[4] * inv_z1, v1[5], v1[6]])
+                T_render_tris[base+2] = ti.Vector([px2, py2, inv_z2, v2[3] * inv_z2, v2[4] * inv_z2, v2[5], v2[6]])
             
             elif in_count == 1:
                 in_v = v0; out1 = v1; out2 = v2
@@ -212,12 +235,11 @@ init -5 python:
                 inv_z1 = 1.0 / new_v1[2]; px1 = new_v1[0] * fov * inv_z1 + res_x * 0.5; py1 = new_v1[1] * fov * inv_z1 + res_y * 0.5
                 inv_z2 = 1.0 / new_v2[2]; px2 = new_v2[0] * fov * inv_z2 + res_x * 0.5; py2 = new_v2[1] * fov * inv_z2 + res_y * 0.5
                 
-                T_render_tris[base] = ti.Vector([px0, py0, inv_z0, in_v[3] * inv_z0, in_v[4] * inv_z0, in_v[5]])
-                T_render_tris[base+1] = ti.Vector([px1, py1, inv_z1, new_v1[3] * inv_z1, new_v1[4] * inv_z1, new_v1[5]])
-                T_render_tris[base+2] = ti.Vector([px2, py2, inv_z2, new_v2[3] * inv_z2, new_v2[4] * inv_z2, new_v2[5]])
+                T_render_tris[base] = ti.Vector([px0, py0, inv_z0, in_v[3] * inv_z0, in_v[4] * inv_z0, in_v[5], in_v[6]])
+                T_render_tris[base+1] = ti.Vector([px1, py1, inv_z1, new_v1[3] * inv_z1, new_v1[4] * inv_z1, new_v1[5], in_v[6]])
+                T_render_tris[base+2] = ti.Vector([px2, py2, inv_z2, new_v2[3] * inv_z2, new_v2[4] * inv_z2, new_v2[5], in_v[6]])
             
             elif in_count == 2:
-                # two vertices inside, one is outside
                 out_v = v0; in1 = v1; in2 = v2
                 if v1[2] < near:
                     out_v = v1; in1 = v2; in2 = v0
@@ -239,13 +261,13 @@ init -5 python:
                 inv_z2 = 1.0 / in2[2]; px2 = in2[0] * fov * inv_z2 + res_x * 0.5; py2 = in2[1] * fov * inv_z2 + res_y * 0.5
                 inv_z3 = 1.0 / new_v2[2]; px3 = new_v2[0] * fov * inv_z3 + res_x * 0.5; py3 = new_v2[1] * fov * inv_z3 + res_y * 0.5
                 
-                T_render_tris[base1]   = ti.Vector([px0, py0, inv_z0, in1[3] * inv_z0, in1[4] * inv_z0, in1[5]])
-                T_render_tris[base1+1] = ti.Vector([px2, py2, inv_z2, in2[3] * inv_z2, in2[4] * inv_z2, in2[5]])
-                T_render_tris[base1+2] = ti.Vector([px1, py1, inv_z1, new_v1[3] * inv_z1, new_v1[4] * inv_z1, new_v1[5]])
+                T_render_tris[base1]   = ti.Vector([px0, py0, inv_z0, in1[3] * inv_z0, in1[4] * inv_z0, in1[5], in1[6]])
+                T_render_tris[base1+1] = ti.Vector([px2, py2, inv_z2, in2[3] * inv_z2, in2[4] * inv_z2, in2[5], in2[6]])
+                T_render_tris[base1+2] = ti.Vector([px1, py1, inv_z1, new_v1[3] * inv_z1, new_v1[4] * inv_z1, new_v1[5], in1[6]])
                 
-                T_render_tris[base2]   = ti.Vector([px1, py1, inv_z1, new_v1[3] * inv_z1, new_v1[4] * inv_z1, new_v1[5]])
-                T_render_tris[base2+1] = ti.Vector([px2, py2, inv_z2, in2[3] * inv_z2, in2[4] * inv_z2, in2[5]])
-                T_render_tris[base2+2] = ti.Vector([px3, py3, inv_z3, new_v2[3] * inv_z3, new_v2[4] * inv_z3, new_v2[5]])
+                T_render_tris[base2]   = ti.Vector([px1, py1, inv_z1, new_v1[3] * inv_z1, new_v1[4] * inv_z1, new_v1[5], in1[6]])
+                T_render_tris[base2+1] = ti.Vector([px2, py2, inv_z2, in2[3] * inv_z2, in2[4] * inv_z2, in2[5], in2[6]])
+                T_render_tris[base2+2] = ti.Vector([px3, py3, inv_z3, new_v2[3] * inv_z3, new_v2[4] * inv_z3, new_v2[5], in1[6]])
 
     @ti.kernel
     def taichi_clear_buffers(res_x: ti.i32, res_y: ti.i32):
@@ -317,8 +339,9 @@ init -5 python:
                                     
                                     tu_idx = ti.cast(u_frac * ti.cast(global_tex_w - 1, ti.f32), ti.i32)
                                     tv_idx = ti.cast((1.0 - v_frac) * ti.cast(global_tex_h - 1, ti.f32), ti.i32)
+                                    tex_id = ti.cast(v0[6], ti.i32)
                                     
-                                    color = T_texture_data[tu_idx, tv_idx]
+                                    color = T_texture_data[tex_id, tu_idx, tv_idx]
 
                                     T_pixels[j, px] = [
                                         ti.cast(ti.cast(color[0], ti.f32) * final_intensity, ti.u8),
@@ -372,8 +395,9 @@ init -5 python:
                             
                             tu_idx = ti.cast(u_frac * ti.cast(global_tex_w - 1, ti.f32), ti.i32)
                             tv_idx = ti.cast((1.0 - v_frac) * ti.cast(global_tex_h - 1, ti.f32), ti.i32)
+                            tex_id = ti.cast(v0[6], ti.i32)
                             
-                            color = T_texture_data[tu_idx, tv_idx]
+                            color = T_texture_data[tex_id, tu_idx, tv_idx]
 
                             T_pixels[j, px] = [
                                 ti.cast(ti.cast(color[0], ti.f32) * final_intensity, ti.u8),
@@ -502,7 +526,7 @@ init -5 python:
             nonlocal v_count
             v_list.extend([p0, p1, p2, p3])
             n_list.extend([normal, normal, normal, normal])
-            u_list.extend([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+            u_list.extend([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]])
             i_list.extend([v_count, v_count+1, v_count+2, v_count+2, v_count+3, v_count])
             v_count += 4
 
@@ -563,6 +587,15 @@ init -5 python:
             print(f"Sayoristein: OBJ not present: {obj_path}")
             return [], [], [], []
 
+        tex_path = os.path.join(os.path.dirname(obj_path), "texture.png")
+        
+        if os.path.exists(tex_path):
+            tex_id = float(load_texture_to_taichi(tex_path))
+            print(f"Loaded texture for {obj_path} at tex_id={tex_id}")
+        else:
+            tex_id = float(get_fallback_texture_id())
+            print(f"No texture found for {obj_path}, using fallback tex_id={tex_id}")
+        
         cache_key = (obj_path, scale)
         if cache_key in _global_obj_geometry_cache:
             c_v, c_n, c_u, c_i = _global_obj_geometry_cache[cache_key]
@@ -575,7 +608,15 @@ init -5 python:
                     data = np.load(npz_path)
                     v_np = data["v"]
                     n_list = data["n"].tolist()
-                    u_list = data["u"].tolist()
+                    u_np = data["u"].copy()
+                    
+                    if u_np.shape[1] == 2:
+                        tex_col = np.full((u_np.shape[0], 1), tex_id, dtype=np.float32)
+                        u_np = np.hstack((u_np, tex_col))
+                    else:
+                        u_np[:, 2] = tex_id
+                        
+                    u_list = u_np.tolist()
                     i_list = data["i"].tolist()
                     
                     if scale != 1.0:
@@ -614,9 +655,9 @@ init -5 python:
                 return None
 
             p = positions[vi]
-            uv = [0.0, 0.0]
+            uv = [0.0, 0.0, tex_id]
             if vti is not None and 0 <= vti < len(texcoords):
-                uv = texcoords[vti]
+                uv = [texcoords[vti][0], texcoords[vti][1], tex_id]
 
             nrm = [0.0, 1.0, 0.0]
             if vni is not None and 0 <= vni < len(normals):
@@ -625,7 +666,7 @@ init -5 python:
             idx = len(v_list)
             v_list.append([p[0], p[1], p[2]])
             n_list.append([nrm[0], nrm[1], nrm[2]])
-            u_list.append([uv[0], uv[1]])
+            u_list.append([uv[0], uv[1], uv[2]])
             cache[key] = idx
             return idx
 
@@ -759,7 +800,7 @@ init -5 python:
 
             v_np.resize((MAX_VERTS, 3), refcheck=False)
             n_np.resize((MAX_VERTS, 3), refcheck=False)
-            u_np.resize((MAX_VERTS, 2), refcheck=False)
+            u_np.resize((MAX_VERTS, 3), refcheck=False)
             i_np.resize((MAX_TRIS * 3,), refcheck=False)
 
             T_vertices.from_numpy(v_np)
