@@ -52,7 +52,7 @@ init -5 python:
             
     MAX_RES_X = 1920
     MAX_RES_Y = 1080
-    MAX_TRIS = 2000000
+    MAX_TRIS = 500000
     MAX_VERTS = MAX_TRIS * 3
     MAX_TEXTURES = 64
 
@@ -76,10 +76,8 @@ init -5 python:
     global_tex_h = 2048
     T_texture_data = ti.Vector.field(3, dtype=ti.u8, shape=(MAX_TEXTURES, global_tex_w, global_tex_h))
     
-    init_tex_field = np.full((MAX_TEXTURES, global_tex_w, global_tex_h, 3), 200, dtype=np.uint8)
-    T_texture_data.from_numpy(init_tex_field)
-
     _texture_registry = {}
+
     _next_tex_id = 0
 
     def get_fallback_texture_id():
@@ -127,12 +125,39 @@ init -5 python:
                         c = surf.get_at((x, y))
                         tex_np[x, y] = [c.r, c.g, c.b]
             
-            full_tex_np = T_texture_data.to_numpy()
-            full_tex_np[tex_id] = tex_np
-            T_texture_data.from_numpy(full_tex_np)
+            taichi_upload_single_texture(tex_id, tex_np, w, h)
             
             print(f"Taichi Engine: Loaded texture {path} ({w}x{h}) at slot {tex_id}")
             return tex_id
+        except Exception as e:
+            print(f"Taichi Engine: Error loading texture {path}: {e}")
+            return tex_id
+
+            
+        try:
+            surf = pygame.image.load(path).convert(24) 
+            w, h = surf.get_size()
+            
+            if w != 2048 or h != 2048:
+                surf = pygame.transform.scale(surf, (2048, 2048))
+                w, h = 2048, 2048
+            
+                try:
+                    tex_data = pygame.image.tostring(surf, "RGB")
+                    tex_np = np.frombuffer(tex_data, dtype=np.uint8).reshape((h, w, 3))
+                    tex_np = np.transpose(tex_np, (1, 0, 2))
+                except Exception:
+                    tex_np = np.zeros((w, h, 3), dtype=np.uint8)
+                    for x in range(w):
+                        for y in range(h):
+                            c = surf.get_at((x, y))
+                            tex_np[x, y] = [c.r, c.g, c.b]
+                
+                taichi_upload_single_texture(tex_id, tex_np, w, h)
+                
+                print(f"Taichi Engine: Loaded texture {path} ({w}x{h}) at slot {tex_id}")
+                return tex_id
+
         except Exception as e:
             print(f"Taichi Engine: Error loading texture {path}: {e}")
             return tex_id
@@ -144,6 +169,14 @@ init -5 python:
         if _taichi_texture_loaded:
             return
         get_fallback_texture_id()
+
+    @ti.kernel
+    def taichi_upload_single_texture(tex_id: ti.i32, img_data: ti.types.ndarray(), w: ti.i32, h: ti.i32):
+        for x, y in ti.ndrange(2048, 2048):
+            if x < w and y < h:
+                T_texture_data[tex_id, x, y] = ti.Vector([img_data[x, y, 0], img_data[x, y, 1], img_data[x, y, 2]])
+            else:
+                T_texture_data[tex_id, x, y] = ti.Vector([200, 200, 200])
 
     @ti.func
     def edge_function(a, b, c):
@@ -508,7 +541,7 @@ init -5 python:
 
     def get_level_geometry(map_grid):
         map_grid = normalize_worldmap_plane(map_grid)
-
+    
         w = len(map_grid)
         h = len(map_grid[0]) if w > 0 else 0
         
@@ -516,7 +549,7 @@ init -5 python:
             if x < 0 or x >= w or y < 0 or y >= h:
                 return False
             return map_grid[x][y] > 0
-
+    
         v_list = []
         n_list = []
         u_list = []
@@ -531,7 +564,7 @@ init -5 python:
             u_list.extend([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]])
             i_list.extend([v_count, v_count+1, v_count+2, v_count+2, v_count+3, v_count])
             v_count += 4
-
+        
         for x in range(w):
             for y in range(h):
                 if is_solid(x, y):
@@ -570,8 +603,9 @@ init -5 python:
                         [bx0, by0, bz1], [bx1, by0, bz1], [bx1, by0, bz0], [bx0, by0, bz0],
                         [0.0, -1.0, 0.0]
                     )
+        
+        return np.array(v_list, dtype=np.float32), np.array(n_list, dtype=np.float32), np.array(u_list, dtype=np.float32), np.array(i_list, dtype=np.int32)
 
-        return v_list, n_list, u_list, i_list
 
     def get_model_texture_id(model_path):
         tex_path = os.path.join(os.path.dirname(model_path), "texture.png")
@@ -587,7 +621,39 @@ init -5 python:
         """
         if not os.path.exists(npz_path):
             print(f"Taichi Engine: Model not found: {npz_path}")
-            return [], [], [], [], [],[]
+            return np.array([]), np.array([]), np.array([]), np.array([]), np.array([]), np.array([])
+
+        cache_key = (npz_path, scale, tex_id)
+        if cache_key in _global_obj_geometry_cache:
+            return _global_obj_geometry_cache[cache_key]
+
+        try:
+            data = np.load(npz_path)
+            v_np = data["v"].copy().astype(np.float32)
+            n_np = data["n"].copy().astype(np.float32)
+            u_np = data["u"].copy().astype(np.float32)
+            i_np = data["i"].copy().astype(np.int32)
+            j_np = data["j"].copy().astype(np.int32)
+            w_np = data["w"].copy().astype(np.float32)
+            
+            if scale != 1.0:
+                min_v = v_np.min(axis=0)
+                max_v = v_np.max(axis=0)
+                center = (min_v + max_v) * 0.5
+                v_np[:, 0] = (v_np[:, 0] - center[0]) * scale
+                v_np[:, 1] = (v_np[:, 1] - min_v[1]) * scale
+                v_np[:, 2] = (v_np[:, 2] - center[2]) * scale
+                
+            tex_col = np.full((u_np.shape[0], 1), tex_id, dtype=np.float32)
+            u_np = np.hstack((u_np, tex_col))
+
+            _global_obj_geometry_cache[cache_key] = (v_np, n_np, u_np, i_np, j_np, w_np)
+            return v_np, n_np, u_np, i_np, j_np, w_np
+    
+        except Exception as e:
+            print(f"Taichi Engine: Failed to load {npz_path}: {e}")
+            return np.array([]), np.array([]), np.array([]), np.array([]), np.array([]), np.array([])
+
 
         cache_key = (npz_path, scale, tex_id)
         if cache_key in _global_obj_geometry_cache:
@@ -617,16 +683,15 @@ init -5 python:
             v_list = v_np.tolist()
             u_list = u_np.tolist()
 
-            _global_obj_geometry_cache[cache_key] = (v_list, n_list, u_list, i_list, j_list, w_list)
-            return v_list, n_list, u_list, i_list, j_list, w_list
+            _global_obj_geometry_cache[cache_key] = (v_np, n_np, u_np, i_np, j_np, w_np)
+            return v_np, n_np, u_np, i_np, j_np, w_np
 
         except Exception as e:
             print(f"Taichi Engine: Failed to load {npz_path}: {e}")
             return [], [], [], [], [],[]
 
-    _global_obj_geometry_cache = {}
-
     TAICHI_DEBUG_CAMERA_INPUT = False
+
 
     class TaichiRenderer(object):
         """
@@ -680,20 +745,20 @@ init -5 python:
 
         def _upload_scene_to_gpu(self, scene):
             global global_num_vertices, global_num_triangles
-
-            v_np = np.array(scene.raw_v_list, dtype=np.float32)
-            n_np = np.array(scene.raw_n_list, dtype=np.float32)
-            u_np = np.array(scene.raw_u_list, dtype=np.float32)
-            i_np = np.array(scene.raw_i_list, dtype=np.int32)
-
+    
+            v_np = scene.raw_v
+            n_np = scene.raw_n
+            u_np = scene.raw_u
+            i_np = scene.raw_i
+    
             if len(v_np) > MAX_VERTS:
                 v_np = v_np[:MAX_VERTS]
                 n_np = n_np[:MAX_VERTS]
                 u_np = u_np[:MAX_VERTS]
-
+    
             if len(i_np) > MAX_TRIS * 3:
                 i_np = i_np[:MAX_TRIS * 3]
-
+    
             scene.num_vertices = len(v_np)
             scene.num_triangles = len(i_np) // 3
             global_num_vertices = scene.num_vertices
@@ -701,18 +766,26 @@ init -5 python:
             
             scene.v_np = v_np
             scene.i_np = i_np
-
-            v_np.resize((MAX_VERTS, 3), refcheck=False)
-            n_np.resize((MAX_VERTS, 3), refcheck=False)
-            u_np.resize((MAX_VERTS, 3), refcheck=False)
-            i_np.resize((MAX_TRIS * 3,), refcheck=False)
-
-            T_vertices.from_numpy(v_np)
-            T_normals.from_numpy(n_np)
-            T_uvs.from_numpy(u_np)
-            T_indices.from_numpy(i_np)
-
+    
+            v_np_resized = np.zeros((MAX_VERTS, 3), dtype=np.float32)
+            n_np_resized = np.zeros((MAX_VERTS, 3), dtype=np.float32)
+            u_np_resized = np.zeros((MAX_VERTS, 3), dtype=np.float32)
+            i_np_resized = np.zeros((MAX_TRIS * 3,), dtype=np.int32)
+    
+            if len(v_np) > 0:
+                v_np_resized[:len(v_np)] = v_np
+                n_np_resized[:len(n_np)] = n_np
+                u_np_resized[:len(u_np)] = u_np
+            if len(i_np) > 0:
+                i_np_resized[:len(i_np)] = i_np
+    
+            T_vertices.from_numpy(v_np_resized)
+            T_normals.from_numpy(n_np_resized)
+            T_uvs.from_numpy(u_np_resized)
+            T_indices.from_numpy(i_np_resized)
+    
             taichi_init_texture()
+
 
         def draw(self, scene, pose, width, height):
             cur_q = getattr(persistent, "stein_quality_mode", 1)

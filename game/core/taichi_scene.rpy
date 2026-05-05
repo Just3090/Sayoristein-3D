@@ -17,17 +17,17 @@ init -5 python:
         def __init__(self, mesh_map=None, model_path=None, map_grid=None):
             self.mesh_map = None
             self.model_path = model_path
-
-            self.raw_v_list = []
-            self.raw_n_list = []
-            self.raw_u_list = []
-            self.raw_i_list = []
-
+    
+            self.raw_v = np.empty((0, 3), dtype=np.float32)
+            self.raw_n = np.empty((0, 3), dtype=np.float32)
+            self.raw_u = np.empty((0, 3), dtype=np.float32)
+            self.raw_i = np.empty((0,), dtype=np.int32)
+    
             self.instance_aabbs = []
-
+    
             self.num_vertices = 0
             self.num_triangles = 0
-
+    
             if mesh_map and mesh_map.get("instances"):
                 self.load_mesh_map(mesh_map)
             elif model_path:
@@ -39,14 +39,16 @@ init -5 python:
                 v, n, u, i = get_level_geometry(map_grid)
                 self._set_geometry(v, n, u, i)
 
-        def has_geometry(self):
-            return len(self.raw_v_list) > 0
 
-        def _set_geometry(self, v_list, n_list, u_list, i_list):
-            self.raw_v_list = v_list
-            self.raw_n_list = n_list
-            self.raw_u_list = u_list
-            self.raw_i_list = i_list
+        def has_geometry(self):
+            return self.raw_v.size > 0
+    
+        def _set_geometry(self, v, n, u, i):
+            self.raw_v = v
+            self.raw_n = n
+            self.raw_u = u
+            self.raw_i = i
+
 
         def _compute_single_aabb_from_geometry(self, v_list, label):
             if not v_list:
@@ -66,45 +68,45 @@ init -5 python:
 
         def load_mesh_map(self, mesh_map):
             self.mesh_map = mesh_map
-            self.raw_v_list = []
-            self.raw_n_list = []
-            self.raw_u_list = []
-            self.raw_i_list = []
+            self.raw_v = np.empty((0, 3), dtype=np.float32)
+            self.raw_n = np.empty((0, 3), dtype=np.float32)
+            self.raw_u = np.empty((0, 3), dtype=np.float32)
+            self.raw_i = np.empty((0,), dtype=np.int32)
             self.instance_aabbs = []
-
+    
             current_vertex_offset = 0
-
+    
             for inst in mesh_map.get("instances", []):
                 if not inst.get("visible", True):
                     continue
-
+    
                 model_rel_path = inst.get("model_path")
                 if not model_rel_path:
                     continue
-
+    
                 model_path = os.path.join(config.gamedir, "models", model_rel_path)
-
+    
                 pos = inst.get("position", [0.0, 0.0, 0.0])
                 rot = inst.get("rotation", [0.0, 0.0, 0.0])
                 scale = inst.get("scale", [1.0, 1.0, 1.0])
-
+    
                 tex_id = get_model_texture_id(model_path)
                 v, n, u, i, j, w = load_stein_model(model_path, scale=1.0, tex_id=tex_id)
-                if not v:
+                if v.size == 0:
                     continue
-
-                v_np = np.array(v, dtype=np.float32)
-
+                
+                v_np = v.copy()
+    
                 if isinstance(scale, (int, float)):
                     s_vec = np.array([scale, scale, scale], dtype=np.float32)
                 else:
                     s_vec = np.array(scale, dtype=np.float32)
                 v_np *= s_vec
-
+    
                 yaw = math.radians(rot[0])
                 pitch = math.radians(rot[1])
                 roll = math.radians(rot[2])
-
+    
                 # Roll (Z axis)
                 if roll != 0.0:
                     cr = math.cos(roll)
@@ -113,7 +115,7 @@ init -5 python:
                     y_old = v_np[:, 1].copy()
                     v_np[:, 0] = x_old * cr - y_old * sr
                     v_np[:, 1] = x_old * sr + y_old * cr
-
+    
                 # Pitch (X axis)
                 if pitch != 0.0:
                     cp = math.cos(pitch)
@@ -122,7 +124,7 @@ init -5 python:
                     z_old = v_np[:, 2].copy()
                     v_np[:, 1] = y_old * cp - z_old * sp
                     v_np[:, 2] = y_old * sp + z_old * cp
-
+    
                 # Yaw (Y axis)
                 if yaw != 0.0:
                     cy = math.cos(yaw)
@@ -131,11 +133,11 @@ init -5 python:
                     z_old = v_np[:, 2].copy()
                     v_np[:, 0] = x_old * cy - z_old * sy
                     v_np[:, 2] = x_old * sy + z_old * cy
-
+    
                 v_np[:, 0] += pos[0]
                 v_np[:, 1] += pos[1]
                 v_np[:, 2] += pos[2]
-
+    
                 mn = [
                     float(v_np[:, 0].min()),
                     float(v_np[:, 1].min()),
@@ -147,15 +149,16 @@ init -5 python:
                     float(v_np[:, 2].max()),
                 ]
                 self.instance_aabbs.append((mn, mx, model_rel_path))
+    
+                self.raw_v = np.concatenate([self.raw_v, v_np])
+                self.raw_n = np.concatenate([self.raw_n, n])
+                self.raw_u = np.concatenate([self.raw_u, u])
+    
+                offset_indices = i + current_vertex_offset
+                self.raw_i = np.concatenate([self.raw_i, offset_indices])
+    
+                current_vertex_offset += v.shape[0]
 
-                self.raw_v_list.extend(v_np.tolist())
-                self.raw_n_list.extend(n)
-                self.raw_u_list.extend(u)
-
-                offset_indices = [idx + current_vertex_offset for idx in i]
-                self.raw_i_list.extend(offset_indices)
-
-                current_vertex_offset += len(v)
 
         def raycast_instance(self, origin, direction):
             best_idx = -1
