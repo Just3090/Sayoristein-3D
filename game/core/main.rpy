@@ -269,13 +269,13 @@ init python:
                     files.append(f)
         return sorted(files)
 
-    def get_obj_files():
+    def get_npz_files():
         models_dir = os.path.join(config.gamedir, "models")
         files = []
         if os.path.exists(models_dir):
             for root, _, filenames in os.walk(models_dir):
                 for f in filenames:
-                    if f.lower().endswith(".obj"):
+                    if f.lower().endswith(".npz"):
                         rel_path = os.path.relpath(os.path.join(root, f), models_dir)
                         files.append(rel_path)
         return sorted(files)

@@ -1,4 +1,4 @@
-# MeshScene uses: get_obj_geometry
+# MeshScene uses: load_stein_model
 
 # This shit does:
 # Stores the mesh data like vertices, normals, uvs, indices
@@ -31,7 +31,8 @@ init -5 python:
             if mesh_map and mesh_map.get("instances"):
                 self.load_mesh_map(mesh_map)
             elif model_path:
-                v, n, u, i = get_obj_geometry(model_path, scale=1.0)
+                tex_id = get_model_texture_id(model_path)
+                v, n, u, i, j, w = load_stein_model(model_path, scale=1.0, tex_id=tex_id)
                 self._set_geometry(v, n, u, i)
                 self._compute_single_aabb_from_geometry(v, model_path)
             elif map_grid is not None:
@@ -77,17 +78,18 @@ init -5 python:
                 if not inst.get("visible", True):
                     continue
 
-                obj_rel_path = inst.get("obj_path")
-                if not obj_rel_path:
+                model_rel_path = inst.get("model_path")
+                if not model_rel_path:
                     continue
 
-                obj_path = os.path.join(config.gamedir, "models", obj_rel_path)
+                model_path = os.path.join(config.gamedir, "models", model_rel_path)
 
                 pos = inst.get("position", [0.0, 0.0, 0.0])
                 rot = inst.get("rotation", [0.0, 0.0, 0.0])
                 scale = inst.get("scale", [1.0, 1.0, 1.0])
 
-                v, n, u, i = get_obj_geometry(obj_path, scale=1.0)
+                tex_id = get_model_texture_id(model_path)
+                v, n, u, i, j, w = load_stein_model(model_path, scale=1.0, tex_id=tex_id)
                 if not v:
                     continue
 
@@ -144,7 +146,7 @@ init -5 python:
                     float(v_np[:, 1].max()),
                     float(v_np[:, 2].max()),
                 ]
-                self.instance_aabbs.append((mn, mx, obj_rel_path))
+                self.instance_aabbs.append((mn, mx, model_rel_path))
 
                 self.raw_v_list.extend(v_np.tolist())
                 self.raw_n_list.extend(n)

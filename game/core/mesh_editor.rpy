@@ -11,14 +11,14 @@ init python:
             store.meshMap = empty_mesh_map()
             
         store.mesh_editor_files = get_mesh_map_files()
-        store.mesh_editor_models = get_obj_files()
+        store.mesh_editor_models = get_npz_files()
         store.mesh_editor_selected_idx = -1
         store.mesh_editor_tab = "scene"
         store.mesh_editor_filename = "new_mesh_map"
         
-    def mesh_editor_add_instance(obj_path):
+    def mesh_editor_add_instance(model_path):
         inst = {
-            "obj_path": obj_path,
+            "model_path": model_path,
             "position": [0.0, 0.0, 0.0],
             "rotation": [0.0, 0.0, 0.0],
             "scale": [1.0, 1.0, 1.0],
@@ -234,7 +234,7 @@ screen mesh_map_editor():
                                 $ is_sel = (idx == mesh_editor_selected_idx)
                                 hbox:
                                     spacing 5
-                                    textbutton "[idx]: [inst['obj_path']]":
+                                    textbutton "[idx]: [inst['model_path']]":
                                         action SetVariable("mesh_editor_selected_idx", idx)
                                         text_size 14
                                         text_color ("#FF0" if is_sel else "#FFF")

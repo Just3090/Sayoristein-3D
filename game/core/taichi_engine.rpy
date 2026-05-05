@@ -17,6 +17,8 @@ init -5 python:
     import math
     import ctypes
     import os
+    import json
+    import struct
 
     try:
         ti.init(arch=ti.vulkan)
@@ -571,156 +573,58 @@ init -5 python:
 
         return v_list, n_list, u_list, i_list
 
-    def _obj_idx(tok, count):
-        if not tok:
-            return None
-        try:
-            i = int(tok)
-        except Exception:
-            return None
-        return i - 1 if i > 0 else count + i
+    def get_model_texture_id(model_path):
+        tex_path = os.path.join(os.path.dirname(model_path), "texture.png")
+        if os.path.exists(tex_path):
+            return float(load_texture_to_taichi(tex_path))
+        return float(get_fallback_texture_id())
 
     _global_obj_geometry_cache = {}
 
-    def get_obj_geometry(obj_path, scale=1.0):
-        if not obj_path or (not os.path.exists(obj_path)):
-            print(f"Sayoristein: OBJ not present: {obj_path}")
-            return [], [], [], []
+    def load_stein_model(npz_path, scale=1.0, tex_id=0.0):
+        """
+        Load for pre compiled files in our numpy compressed method (.npz).
+        """
+        if not os.path.exists(npz_path):
+            print(f"Taichi Engine: Model not found: {npz_path}")
+            return [], [], [], [], [],[]
 
-        tex_path = os.path.join(os.path.dirname(obj_path), "texture.png")
-        
-        if os.path.exists(tex_path):
-            tex_id = float(load_texture_to_taichi(tex_path))
-            print(f"Loaded texture for {obj_path} at tex_id={tex_id}")
-        else:
-            tex_id = float(get_fallback_texture_id())
-            print(f"No texture found for {obj_path}, using fallback tex_id={tex_id}")
-        
-        cache_key = (obj_path, scale)
+        cache_key = (npz_path, scale, tex_id)
         if cache_key in _global_obj_geometry_cache:
-            c_v, c_n, c_u, c_i = _global_obj_geometry_cache[cache_key]
-            return list(c_v), list(c_n), list(c_u), list(c_i)
-
-        npz_path = obj_path + ".npz"
-        if os.path.exists(npz_path) and os.path.exists(obj_path):
-            if os.path.getmtime(npz_path) >= os.path.getmtime(obj_path):
-                try:
-                    data = np.load(npz_path)
-                    v_np = data["v"]
-                    n_list = data["n"].tolist()
-                    u_np = data["u"].copy()
-                    
-                    if u_np.shape[1] == 2:
-                        tex_col = np.full((u_np.shape[0], 1), tex_id, dtype=np.float32)
-                        u_np = np.hstack((u_np, tex_col))
-                    else:
-                        u_np[:, 2] = tex_id
-                        
-                    u_list = u_np.tolist()
-                    i_list = data["i"].tolist()
-                    
-                    if scale != 1.0:
-                        min_v = v_np.min(axis=0)
-                        max_v = v_np.max(axis=0)
-                        center = (min_v + max_v) * 0.5
-                        v_np[:, 0] = (v_np[:, 0] - center[0]) * scale
-                        v_np[:, 1] = (v_np[:, 1] - min_v[1]) * scale
-                        v_np[:, 2] = (v_np[:, 2] - center[2]) * scale
-                    
-                    v_list_final = v_np.tolist()
-                    _global_obj_geometry_cache[cache_key] = (v_list_final, n_list, u_list, i_list)
-                    return list(v_list_final), list(n_list), list(u_list), list(i_list)
-                except Exception as e:
-                    print(f"Sayoristein: Failed to load {npz_path}: {e}")
-
-        positions = []
-        texcoords = []
-        normals = []
-
-        v_list = []
-        n_list = []
-        u_list = []
-        i_list = []
-        cache = {}
-
-        def get_vertex(tok):
-            parts = tok.split("/")
-            vi = _obj_idx(parts[0] if len(parts) > 0 else "", len(positions))
-            vti = _obj_idx(parts[1] if len(parts) > 1 else "", len(texcoords))
-            vni = _obj_idx(parts[2] if len(parts) > 2 else "", len(normals))
-            key = (vi, vti, vni)
-            if key in cache:
-                return cache[key]
-            if vi is None or vi < 0 or vi >= len(positions):
-                return None
-
-            p = positions[vi]
-            uv = [0.0, 0.0, tex_id]
-            if vti is not None and 0 <= vti < len(texcoords):
-                uv = [texcoords[vti][0], texcoords[vti][1], tex_id]
-
-            nrm = [0.0, 1.0, 0.0]
-            if vni is not None and 0 <= vni < len(normals):
-                nrm = normals[vni]
-
-            idx = len(v_list)
-            v_list.append([p[0], p[1], p[2]])
-            n_list.append([nrm[0], nrm[1], nrm[2]])
-            u_list.append([uv[0], uv[1], uv[2]])
-            cache[key] = idx
-            return idx
+            c_v, c_n, c_u, c_i, c_j, c_w = _global_obj_geometry_cache[cache_key]
+            return list(c_v), list(c_n), list(c_u), list(c_i), list(c_j), list(c_w)
 
         try:
-            with open(obj_path, "r", encoding="utf-8", errors="ignore") as f:
-                for raw in f:
-                    line = raw.strip()
-                    if (not line) or line.startswith("#"):
-                        continue
-                    parts = line.split()
-                    tag = parts[0]
-                    if tag == "v" and len(parts) >= 4:
-                        positions.append([float(parts[1]), float(parts[2]), float(parts[3])])
-                    elif tag == "vt" and len(parts) >= 3:
-                        texcoords.append([float(parts[1]), float(parts[2])])
-                    elif tag == "vn" and len(parts) >= 4:
-                        normals.append([float(parts[1]), float(parts[2]), float(parts[3])])
-                    elif tag == "f" and len(parts) >= 4:
-                        face = []
-                        for tok in parts[1:]:
-                            idx = get_vertex(tok)
-                            if idx is not None:
-                                face.append(idx)
-                        if len(face) >= 3:
-                            for k in range(1, len(face) - 1):
-                                i_list.extend([face[0], face[k], face[k + 1]])
+            data = np.load(npz_path)
+            v_np = data["v"].copy()
+            n_list = data["n"].tolist()
+            u_np = data["u"].copy()
+            i_list = data["i"].tolist()
+            j_list = data["j"].tolist()
+            w_list = data["w"].tolist()
+            
+            if scale != 1.0:
+                min_v = v_np.min(axis=0)
+                max_v = v_np.max(axis=0)
+                center = (min_v + max_v) * 0.5
+                v_np[:, 0] = (v_np[:, 0] - center[0]) * scale
+                v_np[:, 1] = (v_np[:, 1] - min_v[1]) * scale
+                v_np[:, 2] = (v_np[:, 2] - center[2]) * scale
+                
+            tex_col = np.full((u_np.shape[0], 1), tex_id, dtype=np.float32)
+            u_np = np.hstack((u_np, tex_col))
+
+            v_list = v_np.tolist()
+            u_list = u_np.tolist()
+
+            _global_obj_geometry_cache[cache_key] = (v_list, n_list, u_list, i_list, j_list, w_list)
+            return v_list, n_list, u_list, i_list, j_list, w_list
+
         except Exception as e:
-            print(f"Sayoristein: Error reading OBJ '{obj_path}': {e}")
-            return [], [], [], []
+            print(f"Taichi Engine: Failed to load {npz_path}: {e}")
+            return [], [], [], [], [],[]
 
-        if not v_list or not i_list:
-            return [], [], [], []
-
-        v_np = np.array(v_list, dtype=np.float32)
-        n_np = np.array(n_list, dtype=np.float32)
-        u_np = np.array(u_list, dtype=np.float32)
-        i_np = np.array(i_list, dtype=np.int32)
-        try:
-            np.savez_compressed(npz_path, v=v_np, n=n_np, u=u_np, i=i_np)
-        except Exception as e:
-            print(f"Sayoristein: Failed to save {npz_path}: {e}")
-
-        min_v = v_np.min(axis=0)
-        max_v = v_np.max(axis=0)
-        center = (min_v + max_v) * 0.5
-
-        v_np[:, 0] = (v_np[:, 0] - center[0]) * scale
-        v_np[:, 1] = (v_np[:, 1] - min_v[1]) * scale
-        v_np[:, 2] = (v_np[:, 2] - center[2]) * scale
-        
-        v_list_final = v_np.tolist()
-        _global_obj_geometry_cache[cache_key] = (v_list_final, n_list, u_list, i_list)
-        
-        return list(v_list_final), list(n_list), list(u_list), list(i_list)
+    _global_obj_geometry_cache = {}
 
     TAICHI_DEBUG_CAMERA_INPUT = False
 
