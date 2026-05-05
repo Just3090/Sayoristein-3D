@@ -52,25 +52,49 @@ init -5 python:
             
     MAX_RES_X = 1920
     MAX_RES_Y = 1080
-    MAX_TRIS = 1000000
-    MAX_VERTS = MAX_TRIS * 3
+    HARD_MAX_TRIS = 10000000
     MAX_TEXTURES = 64
+
+    class TaichiBufferManager:
+        def __init__(self):
+            self.max_tris = 1000000
+            self.max_verts = self.max_tris * 3
+            self.fields = {}
+            self._allocate_buffers()
+
+        def _allocate_buffers(self):
+            self.fields['T_vertices'] = ti.Vector.field(3, dtype=ti.f32, shape=self.max_verts)
+            self.fields['T_normals'] = ti.Vector.field(3, dtype=ti.f32, shape=self.max_verts)
+            self.fields['T_uvs'] = ti.Vector.field(3, dtype=ti.f32, shape=self.max_verts)
+            self.fields['T_cam_space_verts'] = ti.Vector.field(7, dtype=ti.f32, shape=self.max_verts)
+            self.fields['T_indices'] = ti.field(dtype=ti.i32, shape=self.max_tris * 3)
+            self.fields['T_render_tris'] = ti.Vector.field(7, dtype=ti.f32, shape=self.max_tris * 6)
+            self.fields['T_render_tris_count'] = ti.field(dtype=ti.i32, shape=())
+            self.fields['T_tri_aabb'] = ti.Vector.field(4, dtype=ti.i32, shape=self.max_tris * 2)
+            self.fields['T_tri_area'] = ti.field(dtype=ti.f32, shape=self.max_tris * 2)
+            self.fields['T_large_tris'] = ti.field(dtype=ti.i32, shape=self.max_tris * 2)
+            self.fields['T_large_tris_count'] = ti.field(dtype=ti.i32, shape=())
+
+        def ensure_capacity(self, required_tris):
+            required_verts = required_tris * 3
+            if required_tris > self.max_tris or required_verts > self.max_verts:
+                new_max_tris = max(required_tris, int(self.max_tris * 1.5))
+                if new_max_tris > HARD_MAX_TRIS:
+                    print(f"Taichi Engine: Requested tris {required_tris} exceeds HARD_MAX_TRIS {HARD_MAX_TRIS}")
+                    new_max_tris = HARD_MAX_TRIS
+                
+                if new_max_tris == self.max_tris:
+                    return
+
+                print(f"Taichi Engine: Resizing buffers. {self.max_tris} -> {new_max_tris}")
+                self.max_tris = new_max_tris
+                self.max_verts = self.max_tris * 3
+                self._allocate_buffers()
+
+    buffer_manager = TaichiBufferManager()
 
     T_pixels = ti.Vector.field(n=4, dtype=ti.u8, shape=(MAX_RES_Y, MAX_RES_X))
     T_zbuffer = ti.field(dtype=ti.f32, shape=(MAX_RES_Y, MAX_RES_X))
-    T_vertices = ti.Vector.field(3, dtype=ti.f32, shape=MAX_VERTS)
-    T_normals = ti.Vector.field(3, dtype=ti.f32, shape=MAX_VERTS)
-    T_uvs = ti.Vector.field(3, dtype=ti.f32, shape=MAX_VERTS)
-    T_indices = ti.field(dtype=ti.i32, shape=MAX_TRIS * 3)
-    T_cam_space_verts = ti.Vector.field(7, dtype=ti.f32, shape=MAX_VERTS)
-    T_render_tris = ti.Vector.field(7, dtype=ti.f32, shape=MAX_TRIS * 6)
-    T_render_tris_count = ti.field(dtype=ti.i32, shape=())
-    T_tri_aabb = ti.Vector.field(4, dtype=ti.i32, shape=MAX_TRIS * 2)
-    T_tri_area = ti.field(dtype=ti.f32, shape=MAX_TRIS * 2)
-    T_large_tris = ti.field(dtype=ti.i32, shape=MAX_TRIS * 2)
-    T_large_tris_count = ti.field(dtype=ti.i32, shape=())
-    global_num_vertices = 0
-    global_num_triangles = 0
     
     global_tex_w = 2048
     global_tex_h = 2048
@@ -183,7 +207,7 @@ init -5 python:
         return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
 
     @ti.kernel
-    def taichi_process_vertices(cam_x: ti.f32, cam_y: ti.f32, cam_z: ti.f32, cam_yaw: ti.f32, cam_pitch: ti.f32, res_x: ti.f32, res_y: ti.f32, total_verts: ti.i32):
+    def taichi_process_vertices(T_vertices: ti.template(), T_normals: ti.template(), T_uvs: ti.template(), T_cam_space_verts: ti.template(), cam_x: ti.f32, cam_y: ti.f32, cam_z: ti.f32, cam_yaw: ti.f32, cam_pitch: ti.f32, res_x: ti.f32, res_y: ti.f32, total_verts: ti.i32):
         light_dir = ti.Vector([0.5, 0.8, -0.3])
         l_len = ti.sqrt(light_dir[0]**2 + light_dir[1]**2 + light_dir[2]**2)
         light_dir = ti.Vector([light_dir[0]/l_len, light_dir[1]/l_len, light_dir[2]/l_len])
@@ -192,7 +216,7 @@ init -5 python:
         c_p = ti.cos(cam_pitch)
         s_p = ti.sin(cam_pitch)
         fov = res_y * 0.8
-
+        
         for i in range(total_verts):
             v = T_vertices[i]
             n = T_normals[i]
@@ -208,7 +232,7 @@ init -5 python:
             rx = tx * c_y - tz * s_y
             z1 = tx * s_y + tz * c_y
             y1 = ty
-
+            
             ry = y1 * c_p - z1 * s_p
             rz = y1 * s_p + z1 * c_p
             
@@ -219,7 +243,7 @@ init -5 python:
             T_cam_space_verts[i] = ti.Vector([rx, ry, rz, u_v[0], u_v[1], intensity, u_v[2]])
 
     @ti.kernel
-    def taichi_clip_triangles(res_x: ti.f32, res_y: ti.f32, total_tris: ti.i32):
+    def taichi_clip_triangles(T_indices: ti.template(), T_cam_space_verts: ti.template(), T_render_tris_count: ti.template(), T_render_tris: ti.template(), res_x: ti.f32, res_y: ti.f32, total_tris: ti.i32):
         T_render_tris_count[None] = 0
         fov = res_y * 0.8
         near = 0.1
@@ -297,11 +321,11 @@ init -5 python:
                 inv_z3 = 1.0 / new_v2[2]; px3 = new_v2[0] * fov * inv_z3 + res_x * 0.5; py3 = new_v2[1] * fov * inv_z3 + res_y * 0.5
                 
                 T_render_tris[base1]   = ti.Vector([px0, py0, inv_z0, in1[3] * inv_z0, in1[4] * inv_z0, in1[5], in1[6]])
-                T_render_tris[base1+1] = ti.Vector([px2, py2, inv_z2, in2[3] * inv_z2, in2[4] * inv_z2, in2[5], in2[6]])
+                T_render_tris[base1+1] = ti.Vector([px2, py2, inv_z2, in2[3] * inv_z2, in2[4] * inv_z2, in2[5], in1[6]])
                 T_render_tris[base1+2] = ti.Vector([px1, py1, inv_z1, new_v1[3] * inv_z1, new_v1[4] * inv_z1, new_v1[5], in1[6]])
                 
                 T_render_tris[base2]   = ti.Vector([px1, py1, inv_z1, new_v1[3] * inv_z1, new_v1[4] * inv_z1, new_v1[5], in1[6]])
-                T_render_tris[base2+1] = ti.Vector([px2, py2, inv_z2, in2[3] * inv_z2, in2[4] * inv_z2, in2[5], in2[6]])
+                T_render_tris[base2+1] = ti.Vector([px2, py2, inv_z2, in2[3] * inv_z2, in2[4] * inv_z2, in2[5], in1[6]])
                 T_render_tris[base2+2] = ti.Vector([px3, py3, inv_z3, new_v2[3] * inv_z3, new_v2[4] * inv_z3, new_v2[5], in1[6]])
 
     @ti.kernel
@@ -316,7 +340,7 @@ init -5 python:
             T_zbuffer[j, i] = 1e10
 
     @ti.kernel
-    def taichi_render_small_tris(res_x: ti.i32, res_y: ti.i32):
+    def taichi_render_small_tris(T_render_tris_count: ti.template(), T_render_tris: ti.template(), T_large_tris_count: ti.template(), T_large_tris: ti.template(), T_tri_aabb: ti.template(), T_tri_area: ti.template(), T_zbuffer: ti.template(), T_pixels: ti.template(), T_texture_data: ti.template(), res_x: ti.i32, res_y: ti.i32):
         T_large_tris_count[None] = 0
         
         for t_idx in range(T_render_tris_count[None]):
@@ -351,7 +375,7 @@ init -5 python:
                         w0 = edge_function(v1, v2, p)
                         w1 = edge_function(v2, v0, p)
                         w2 = edge_function(v0, v1, p)
-
+        
                         if w0 >= 0.0 and w1 >= 0.0 and w2 >= 0.0:
                             w0_n = w0 / area
                             w1_n = w1 / area
@@ -359,7 +383,7 @@ init -5 python:
                             inv_z = w0_n * v0[2] + w1_n * v1[2] + w2_n * v2[2]
                             z = 1.0 / inv_z
                             j = res_y - 1 - py
-
+        
                             if z > 0.05:
                                 old_z = ti.atomic_min(T_zbuffer[j, px], z)
                                 if z <= old_z:
@@ -368,7 +392,7 @@ init -5 python:
                                     tex_u = u_z * z
                                     tex_v = v_z * z
                                     final_intensity = w0_n * v0[5] + w1_n * v1[5] + w2_n * v2[5]
-
+        
                                     u_frac = tex_u - ti.floor(tex_u)
                                     v_frac = tex_v - ti.floor(tex_v)
                                     
@@ -377,7 +401,7 @@ init -5 python:
                                     tex_id = ti.cast(v0[6], ti.i32)
                                     
                                     color = T_texture_data[tex_id, tu_idx, tv_idx]
-
+        
                                     T_pixels[j, px] = [
                                         ti.cast(ti.cast(color[0], ti.f32) * final_intensity, ti.u8),
                                         ti.cast(ti.cast(color[1], ti.f32) * final_intensity, ti.u8),
@@ -386,7 +410,7 @@ init -5 python:
                                     ]
 
     @ti.kernel
-    def taichi_render_large_tris(res_x: ti.i32, res_y: ti.i32):
+    def taichi_render_large_tris(T_large_tris_count: ti.template(), T_large_tris: ti.template(), T_tri_aabb: ti.template(), T_tri_area: ti.template(), T_render_tris: ti.template(), T_zbuffer: ti.template(), T_pixels: ti.template(), T_texture_data: ti.template(), res_x: ti.i32, res_y: ti.i32):
         num_large = T_large_tris_count[None]
         for px, py in ti.ndrange(res_x, res_y):
             j = res_y - 1 - py
@@ -424,7 +448,7 @@ init -5 python:
                             tex_u = u_z * z
                             tex_v = v_z * z
                             final_intensity = w0_n * v0[5] + w1_n * v1[5] + w2_n * v2[5]
-
+        
                             u_frac = tex_u - ti.floor(tex_u)
                             v_frac = tex_v - ti.floor(tex_v)
                             
@@ -433,7 +457,7 @@ init -5 python:
                             tex_id = ti.cast(v0[6], ti.i32)
                             
                             color = T_texture_data[tex_id, tu_idx, tv_idx]
-
+        
                             T_pixels[j, px] = [
                                 ti.cast(ti.cast(color[0], ti.f32) * final_intensity, ti.u8),
                                 ti.cast(ti.cast(color[1], ti.f32) * final_intensity, ti.u8),
@@ -744,46 +768,37 @@ init -5 python:
             print("Taichi Engine: Applied quality mode {}, resolution {}x{}".format(qmode, self.res_x, self.res_y))
 
         def _upload_scene_to_gpu(self, scene):
-            global global_num_vertices, global_num_triangles
-
             v_np = scene.raw_v
             n_np = scene.raw_n
             u_np = scene.raw_u
             i_np = scene.raw_i
-
-            if len(v_np) > MAX_VERTS:
-                v_np = v_np[:MAX_VERTS]
-                n_np = n_np[:MAX_VERTS]
-                u_np = u_np[:MAX_VERTS]
-
-            if len(i_np) > MAX_TRIS * 3:
-                i_np = i_np[:MAX_TRIS * 3]
-
+            
+            num_tris = len(i_np) // 3
+            buffer_manager.ensure_capacity(num_tris)
+            
             scene.num_vertices = len(v_np)
-            scene.num_triangles = len(i_np) // 3
-            global_num_vertices = scene.num_vertices
-            global_num_triangles = scene.num_triangles
+            scene.num_triangles = num_tris
             
             scene.v_np = v_np
             scene.i_np = i_np
-
-            v_np_resized = np.zeros((MAX_VERTS, 3), dtype=np.float32)
-            n_np_resized = np.zeros((MAX_VERTS, 3), dtype=np.float32)
-            u_np_resized = np.zeros((MAX_VERTS, 3), dtype=np.float32)
-            i_np_resized = np.zeros((MAX_TRIS * 3,), dtype=np.int32)
-
+            
+            v_np_resized = np.zeros((buffer_manager.max_verts, 3), dtype=np.float32)
+            n_np_resized = np.zeros((buffer_manager.max_verts, 3), dtype=np.float32)
+            u_np_resized = np.zeros((buffer_manager.max_verts, 3), dtype=np.float32)
+            i_np_resized = np.zeros((buffer_manager.max_tris * 3,), dtype=np.int32)
+            
             if len(v_np) > 0:
                 v_np_resized[:len(v_np)] = v_np
                 n_np_resized[:len(n_np)] = n_np
                 u_np_resized[:len(u_np)] = u_np
             if len(i_np) > 0:
                 i_np_resized[:len(i_np)] = i_np
-
-            T_vertices.from_numpy(v_np_resized)
-            T_normals.from_numpy(n_np_resized)
-            T_uvs.from_numpy(u_np_resized)
-            T_indices.from_numpy(i_np_resized)
-
+            
+            buffer_manager.fields['T_vertices'].from_numpy(v_np_resized)
+            buffer_manager.fields['T_normals'].from_numpy(n_np_resized)
+            buffer_manager.fields['T_uvs'].from_numpy(u_np_resized)
+            buffer_manager.fields['T_indices'].from_numpy(i_np_resized)
+            
             taichi_init_texture()
 
 
@@ -791,20 +806,35 @@ init -5 python:
             cur_q = getattr(persistent, "stein_quality_mode", 1)
             if cur_q != self.last_qmode:
                 self.reapply_quality(scene)
-
+            
             if scene.num_vertices > 0:
                 eye_y = pose.player_y + 1.7
                 render_yaw = pose.player_yaw + (math.pi * 0.5)
                 taichi_clear_buffers(self.res_x, self.res_y)
+                
+                fields = buffer_manager.fields
                 taichi_process_vertices(
+                    fields['T_vertices'], fields['T_normals'], fields['T_uvs'], fields['T_cam_space_verts'],
                     pose.player_x, eye_y, pose.player_z, render_yaw, pose.player_pitch,
                     float(self.res_x), float(self.res_y), scene.num_vertices,
                 )
-                taichi_clip_triangles(float(self.res_x), float(self.res_y), scene.num_triangles)
-                taichi_render_small_tris(self.res_x, self.res_y)
-                taichi_render_large_tris(self.res_x, self.res_y)
-
+                taichi_clip_triangles(
+                    fields['T_indices'], fields['T_cam_space_verts'], fields['T_render_tris_count'], fields['T_render_tris'],
+                    float(self.res_x), float(self.res_y), scene.num_triangles
+                )
+                taichi_render_small_tris(
+                    fields['T_render_tris_count'], fields['T_render_tris'], fields['T_large_tris_count'], fields['T_large_tris'], 
+                    fields['T_tri_aabb'], fields['T_tri_area'], T_zbuffer, T_pixels, T_texture_data,
+                    self.res_x, self.res_y
+                )
+                taichi_render_large_tris(
+                    fields['T_large_tris_count'], fields['T_large_tris'], fields['T_tri_aabb'], fields['T_tri_area'], 
+                    fields['T_render_tris'], T_zbuffer, T_pixels, T_texture_data,
+                    self.res_x, self.res_y
+                )
+            
             full_array = T_pixels.to_numpy()
+
             active_slice = full_array[:self.res_y, :self.res_x]
             contig_slice = np.ascontiguousarray(active_slice)
             raw_bytes = contig_slice.tobytes()
