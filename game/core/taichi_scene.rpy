@@ -96,6 +96,7 @@ init -5 python:
                     continue
                 
                 v_np = v.copy()
+                n_np = n.copy()
     
                 if isinstance(scale, (int, float)):
                     s_vec = np.array([scale, scale, scale], dtype=np.float32)
@@ -115,6 +116,11 @@ init -5 python:
                     y_old = v_np[:, 1].copy()
                     v_np[:, 0] = x_old * cr - y_old * sr
                     v_np[:, 1] = x_old * sr + y_old * cr
+                    
+                    nx_old = n_np[:, 0].copy()
+                    ny_old = n_np[:, 1].copy()
+                    n_np[:, 0] = nx_old * cr - ny_old * sr
+                    n_np[:, 1] = nx_old * sr + ny_old * cr
     
                 # Pitch (X axis)
                 if pitch != 0.0:
@@ -124,6 +130,11 @@ init -5 python:
                     z_old = v_np[:, 2].copy()
                     v_np[:, 1] = y_old * cp - z_old * sp
                     v_np[:, 2] = y_old * sp + z_old * cp
+                    
+                    ny_old = n_np[:, 1].copy()
+                    nz_old = n_np[:, 2].copy()
+                    n_np[:, 1] = ny_old * cp - nz_old * sp
+                    n_np[:, 2] = ny_old * sp + nz_old * cp
     
                 # Yaw (Y axis)
                 if yaw != 0.0:
@@ -133,6 +144,11 @@ init -5 python:
                     z_old = v_np[:, 2].copy()
                     v_np[:, 0] = x_old * cy - z_old * sy
                     v_np[:, 2] = x_old * sy + z_old * cy
+                    
+                    nx_old = n_np[:, 0].copy()
+                    nz_old = n_np[:, 2].copy()
+                    n_np[:, 0] = nx_old * cy - nz_old * sy
+                    n_np[:, 2] = nx_old * sy + nz_old * cy
     
                 v_np[:, 0] += pos[0]
                 v_np[:, 1] += pos[1]
@@ -151,7 +167,7 @@ init -5 python:
                 self.instance_aabbs.append((mn, mx, model_rel_path))
     
                 self.raw_v = np.concatenate([self.raw_v, v_np])
-                self.raw_n = np.concatenate([self.raw_n, n])
+                self.raw_n = np.concatenate([self.raw_n, n_np])
                 self.raw_u = np.concatenate([self.raw_u, u])
     
                 offset_indices = i + current_vertex_offset
