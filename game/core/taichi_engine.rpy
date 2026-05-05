@@ -52,7 +52,7 @@ init -5 python:
             
     MAX_RES_X = 1920
     MAX_RES_Y = 1080
-    MAX_TRIS = 500000
+    MAX_TRIS = 1000000
     MAX_VERTS = MAX_TRIS * 3
     MAX_TEXTURES = 64
 
@@ -176,7 +176,7 @@ init -5 python:
             if x < w and y < h:
                 T_texture_data[tex_id, x, y] = ti.Vector([img_data[x, y, 0], img_data[x, y, 1], img_data[x, y, 2]])
             else:
-                T_texture_data[tex_id, x, y] = ti.Vector([200, 200, 200])
+                T_texture_data[tex_id, x, y] = ti.Vector([ti.cast(200, ti.u8), ti.cast(200, ti.u8), ti.cast(200, ti.u8)])
 
     @ti.func
     def edge_function(a, b, c):
@@ -745,20 +745,20 @@ init -5 python:
 
         def _upload_scene_to_gpu(self, scene):
             global global_num_vertices, global_num_triangles
-    
+
             v_np = scene.raw_v
             n_np = scene.raw_n
             u_np = scene.raw_u
             i_np = scene.raw_i
-    
+
             if len(v_np) > MAX_VERTS:
                 v_np = v_np[:MAX_VERTS]
                 n_np = n_np[:MAX_VERTS]
                 u_np = u_np[:MAX_VERTS]
-    
+
             if len(i_np) > MAX_TRIS * 3:
                 i_np = i_np[:MAX_TRIS * 3]
-    
+
             scene.num_vertices = len(v_np)
             scene.num_triangles = len(i_np) // 3
             global_num_vertices = scene.num_vertices
@@ -766,24 +766,24 @@ init -5 python:
             
             scene.v_np = v_np
             scene.i_np = i_np
-    
+
             v_np_resized = np.zeros((MAX_VERTS, 3), dtype=np.float32)
             n_np_resized = np.zeros((MAX_VERTS, 3), dtype=np.float32)
             u_np_resized = np.zeros((MAX_VERTS, 3), dtype=np.float32)
             i_np_resized = np.zeros((MAX_TRIS * 3,), dtype=np.int32)
-    
+
             if len(v_np) > 0:
                 v_np_resized[:len(v_np)] = v_np
                 n_np_resized[:len(n_np)] = n_np
                 u_np_resized[:len(u_np)] = u_np
             if len(i_np) > 0:
                 i_np_resized[:len(i_np)] = i_np
-    
+
             T_vertices.from_numpy(v_np_resized)
             T_normals.from_numpy(n_np_resized)
             T_uvs.from_numpy(u_np_resized)
             T_indices.from_numpy(i_np_resized)
-    
+
             taichi_init_texture()
 
 
