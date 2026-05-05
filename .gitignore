@@ -43,5 +43,3 @@ stein_core.so
 
 .idea/
 python-packages/
-
-*.npz
