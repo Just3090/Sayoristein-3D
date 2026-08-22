@@ -147,14 +147,15 @@ screen sayoristein_settings_menu():
                         hbox:
                             spacing 15
                             xalign 0.5
+                            textbutton _("Ultra High") action SetVariable("persistent.stein_quality_mode", 4) style "sayoristein_menu_button" text_style "sayoristein_menu_button_text" text_size 22
                             textbutton _("High") action SetVariable("persistent.stein_quality_mode", 0) style "sayoristein_menu_button" text_style "sayoristein_menu_button_text" text_size 22
                             textbutton _("Low") action SetVariable("persistent.stein_quality_mode", 1) style "sayoristein_menu_button" text_style "sayoristein_menu_button_text" text_size 22
-                            textbutton _("Ultra Low") action SetVariable("persistent.stein_quality_mode", 2) style "sayoristein_menu_button" text_style "sayoristein_menu_button_text" text_size 22
                         hbox:
                             spacing 15
                             xalign 0.5
+                            textbutton _("Ultra Low") action SetVariable("persistent.stein_quality_mode", 2) style "sayoristein_menu_button" text_style "sayoristein_menu_button_text" text_size 22
                             textbutton _("MS Paint is Better") action SetVariable("persistent.stein_quality_mode", 3) style "sayoristein_menu_button" text_style "sayoristein_menu_button_text" text_size 22
-                            textbutton _("Bro, can you see?") action SetVariable("persistent.stein_quality_mode", 4) style "sayoristein_menu_button" text_style "sayoristein_menu_button_text" text_size 22
+                            textbutton _("Bro, can you see?") action SetVariable("persistent.stein_quality_mode", "potato") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text" text_size 22
 
                     null height 10
                     

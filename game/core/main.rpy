@@ -490,6 +490,9 @@ screen stein:
         elif persistent.stein_quality_mode == 3: # MS Paint is Better
             internal_width = 213
             internal_height = 120
+        elif persistent.stein_quality_mode == 4: # Ultra High
+            internal_width = 1280
+            internal_height = 720
         else: # Bro, can you see?
             internal_width = 142
             internal_height = 80
