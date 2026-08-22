@@ -76,12 +76,9 @@ screen sayoristein_menu():
         yalign 0.5
         spacing 15
 
-        textbutton _("Play") action ShowMenu("sayoristein_arena_hub") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
+        textbutton _("Play") action ShowMenu("sayoristein_level_select") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
         textbutton _("Settings") action ShowMenu("sayoristein_settings_menu") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
-        textbutton _("Mesh Map Editor") action Jump("start_mesh_editor") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
-        textbutton _("Play 3D (test)") action Jump("start_mesh_play") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
-        textbutton _("Old DDA: Animation Editor") action Jump("start_animation_editor") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
-        textbutton _("Exit") action Quit() style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
+        textbutton _("Exit") action Return() style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
 
 screen sayoristein_settings_menu():
     tag menu
@@ -350,10 +347,10 @@ screen sayoristein_level_select():
         else:
             textbutton _("Level 3 (Locked)") action Show("stein_locked_message", msg=__("Complete Level 2 first!")) style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
         
-        if persistent.stein_level3_cleared:
-            textbutton _("Arena Mode") action ShowMenu("sayoristein_arena_hub") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
-        else:
-            textbutton _("Arena Mode (Locked)") action Show("stein_locked_message", msg=__("Complete Level 3 to unlock Arena!")) style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
+        # if persistent.stein_level3_cleared:
+        textbutton _("Arena Mode") action ShowMenu("sayoristein_arena_hub") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
+        # else:
+        #     textbutton _("Arena Mode (Locked)") action Show("stein_locked_message", msg=__("Complete Level 3 to unlock Arena!")) style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
 
         textbutton _("Back") action ShowMenu("sayoristein_menu") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
 

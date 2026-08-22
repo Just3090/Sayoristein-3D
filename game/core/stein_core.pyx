@@ -278,7 +278,7 @@ cdef public double get_map_height_c(
         tile = flat_map[idx]
         
         if tile > 0:
-            block_height = 1.0
+            block_height = 0.5 if tile == 20 else 1.0
             
             top_z = (min_layer + l) + block_height
             
@@ -297,24 +297,6 @@ cdef struct ProjectileData:
     double pitch
     int damage
     int from_player
-    int hit_target
-
-cdef struct EnemyData:
-    double x, y, z
-    double dir_x, dir_y
-    double hp
-    int state           # 0=Idle, 1=Chasing, 2=Attacking, 3=Dying, 4=Dead
-    int texture_idx
-    double timer        # For attack cooldowns or state transitions
-    double move_speed
-    int enemy_type      # To distinguish behavior (Guard vs Yuritler)
-
-cdef struct PlayerData:
-    double x, y, z
-    double vel_z
-    double rot
-    int is_grounded
-    int is_crouching
 
 cdef inline double _get_height_fast(int x, int y, int check_z, int w, int h, int layers, int min_layer, int* flat_map):
     if x < 0 or x >= w or y < 0 or y >= h: return -1000.0
@@ -326,7 +308,7 @@ cdef inline double _get_height_fast(int x, int y, int check_z, int w, int h, int
         idx = (l * w * h) + (x * h) + y
         tile = flat_map[idx]
         if tile > 0:
-            block_height = 1.0
+            block_height = 0.5 if tile == 20 else 1.0
             top_z = (min_layer + l) + block_height
             if top_z <= (check_z + 1.0): 
                 if top_z > max_z: max_z = top_z
@@ -335,38 +317,21 @@ cdef inline double _get_height_fast(int x, int y, int check_z, int w, int h, int
 cdef public void update_projectiles_c(
     size_t proj_array_addr,
     int count,
-    size_t enemies_addr,
-    int num_enemies,
-    size_t player_addr,
     double dt,
     size_t flat_map_addr,
     int w, int h, int layers, int min_layer
 ):
     cdef ProjectileData* projs = <ProjectileData*>proj_array_addr
-    cdef EnemyData* enemies = <EnemyData*>enemies_addr
-    cdef PlayerData* player = <PlayerData*>player_addr
     cdef int* flat_map = <int*>flat_map_addr
-    
-    cdef int i, j
+    cdef int i
     cdef double dist_to_travel, traveled, step_dist
     cdef double next_x, next_y, next_z
     cdef double floor_h
     cdef double STEP_SIZE = 0.4
-    
-    cdef double dx, dy
-    cdef double enemy_radius = 0.35
-    cdef double enemy_height = 1.8
-    cdef double player_radius = 0.3
-    cdef double player_height = 1.6
-    
-    cdef double e_x, e_y, e_z
 
     for i in range(count):
         if projs[i].active == 0:
             continue
-        
-        # Reset hit code for this frame
-        projs[i].hit_target = -1
 
         dist_to_travel = projs[i].speed * dt
         traveled = 0.0
@@ -379,48 +344,11 @@ cdef public void update_projectiles_c(
             next_x = projs[i].x + projs[i].dir_x * step_dist
             next_y = projs[i].y + projs[i].dir_y * step_dist
             next_z = projs[i].z + projs[i].dir_z * step_dist
-            
-            # Entity Collision
-            if projs[i].from_player == 1:
-                # Check vs Enemies
-                for j in range(num_enemies):
-                    if enemies[j].state >= 3: continue # Dying or Dead
-                    
-                    e_x = enemies[j].x
-                    e_y = enemies[j].y
-                    e_z = enemies[j].z 
-                    
-                    # More forgiving Z check
-                    if next_z >= (e_z - 0.5) and next_z <= (e_z + enemy_height + 0.2):
-                        dx = next_x - e_x
-                        dy = next_y - e_y
-                        if (dx*dx + dy*dy) < (enemy_radius * enemy_radius):
-                            # Hit
-                            projs[i].hit_target = j
-                            projs[i].active = 0
-                            break
-                            
-                if projs[i].active == 0: break 
 
-            else:
-                # Check vs Player
-                if next_z >= (player.z - 0.2) and next_z <= (player.z + player_height + 0.2):
-                    dx = next_x - player.x
-                    dy = next_y - player.y
-                    if (dx*dx + dy*dy) < (player_radius * player_radius):
-                        # Hit Player (Code -2)
-                        projs[i].hit_target = -2
-                        projs[i].active = 0
-                        break
-                        
-                if projs[i].active == 0: break
-
-            # Wall Collision
             if is_wall(<int>floor(next_x), <int>floor(next_y), <int>floor(next_z), w, h, layers, min_layer, flat_map):
                 projs[i].active = 0
                 break
 
-            # Floor Collision
             floor_h = _get_height_fast(<int>floor(next_x), <int>floor(next_y), <int>floor(next_z), w, h, layers, min_layer, flat_map)
             if next_z < floor_h:
                 projs[i].active = 0
@@ -443,6 +371,16 @@ cdef int compare_sprites(const void* a, const void* b) noexcept nogil:
     if sa.dist_sq < sb.dist_sq: return 1
     if sa.dist_sq > sb.dist_sq: return -1
     return 0
+
+cdef struct EnemyData:
+    double x, y, z
+    double dir_x, dir_y
+    double hp
+    int state           # 0=Idle, 1=Chasing, 2=Attacking, 3=Dying, 4=Dead
+    int texture_idx
+    double timer        # For attack cooldowns or state transitions
+    double move_speed
+    int enemy_type      # To distinguish behavior (Guard vs Yuritler)
 
 cdef public int prepare_scene_sprites_c(
     double player_x, double player_y,
@@ -606,7 +544,7 @@ cdef public int check_hitscan_c(
     cdef double t_closest, proj, dist_to_line_sq
     cdef double hit_z
     cdef double enemy_radius = 0.35
-    cdef double enemy_height = 1.8
+    cdef double enemy_height = 0.8
     
     for i in range(count):
         if enemies[i].state >= 3: continue
@@ -640,6 +578,13 @@ cdef public int check_hitscan_c(
             enemies[best_idx].state = 3 # Dying
             
     return best_idx
+
+cdef struct PlayerData:
+    double x, y, z
+    double vel_z
+    double rot
+    int is_grounded
+    int is_crouching
 
 cdef public void update_player_complete_c(
     size_t player_addr,
@@ -691,14 +636,11 @@ cdef public void update_player_complete_c(
     cdef double new_x = p.x + vx
     cdef double new_y = p.y + vy
     cdef int iz = <int>floor(p.z + 0.5)
-    cdef int iz_head = <int>floor(p.z + 1.5)
     
     # X Axis Collision
     if vx != 0:
         if is_wall(<int>floor(new_x + (radius if vx > 0 else -radius)), <int>floor(p.y + radius), iz, w, h, layers, min_layer, flat_map) or \
-           is_wall(<int>floor(new_x + (radius if vx > 0 else -radius)), <int>floor(p.y - radius), iz, w, h, layers, min_layer, flat_map) or \
-           is_wall(<int>floor(new_x + (radius if vx > 0 else -radius)), <int>floor(p.y + radius), iz_head, w, h, layers, min_layer, flat_map) or \
-           is_wall(<int>floor(new_x + (radius if vx > 0 else -radius)), <int>floor(p.y - radius), iz_head, w, h, layers, min_layer, flat_map):
+           is_wall(<int>floor(new_x + (radius if vx > 0 else -radius)), <int>floor(p.y - radius), iz, w, h, layers, min_layer, flat_map):
             if vx > 0: new_x = floor(new_x + radius) - radius - 0.001
             else:      new_x = floor(new_x - radius) + 1.0 + radius + 0.001
     
@@ -707,9 +649,7 @@ cdef public void update_player_complete_c(
     # Y Axis Collision
     if vy != 0:
         if is_wall(<int>floor(p.x + radius), <int>floor(new_y + (radius if vy > 0 else -radius)), iz, w, h, layers, min_layer, flat_map) or \
-           is_wall(<int>floor(p.x - radius), <int>floor(new_y + (radius if vy > 0 else -radius)), iz, w, h, layers, min_layer, flat_map) or \
-           is_wall(<int>floor(p.x + radius), <int>floor(new_y + (radius if vy > 0 else -radius)), iz_head, w, h, layers, min_layer, flat_map) or \
-           is_wall(<int>floor(p.x - radius), <int>floor(new_y + (radius if vy > 0 else -radius)), iz_head, w, h, layers, min_layer, flat_map):
+           is_wall(<int>floor(p.x - radius), <int>floor(new_y + (radius if vy > 0 else -radius)), iz, w, h, layers, min_layer, flat_map):
             if vy > 0: new_y = floor(new_y + radius) - radius - 0.001
             else:      new_y = floor(new_y - radius) + 1.0 + radius + 0.001
 
@@ -750,109 +690,3 @@ cdef public void update_player_physics_c(
             p.is_grounded = 0
         else:
             pass
-
-cdef public void raycast_triangles_c(
-    double ro_x, double ro_y, double ro_z,
-    double rd_x, double rd_y, double rd_z,
-    size_t vertices_addr,
-    size_t indices_addr,
-    int num_triangles,
-    size_t out_addr
-):
-    cdef float* vertices = <float*>vertices_addr
-    cdef int* indices = <int*>indices_addr
-    cdef double* output = <double*>out_addr
-    
-    # output: [hit(0/1), t, nx, ny, nz]
-    output[0] = 0.0
-    
-    cdef int i, i0, i1, i2
-    cdef double v0x, v0y, v0z
-    cdef double v1x, v1y, v1z
-    cdef double v2x, v2y, v2z
-    cdef double e1x, e1y, e1z
-    cdef double e2x, e2y, e2z
-    cdef double hx, hy, hz
-    cdef double a, f, u, v, t
-    cdef double sx, sy, sz
-    cdef double qx, qy, qz
-    
-    cdef double closest_t = 1e30
-    cdef double best_nx = 0.0
-    cdef double best_ny = 0.0
-    cdef double best_nz = 0.0
-    cdef int hit = 0
-    cdef double len_n = 1.0
-    
-    for i in range(num_triangles):
-        i0 = indices[i * 3]
-        i1 = indices[i * 3 + 1]
-        i2 = indices[i * 3 + 2]
-        
-        v0x = vertices[i0 * 3]
-        v0y = vertices[i0 * 3 + 1]
-        v0z = vertices[i0 * 3 + 2]
-        
-        v1x = vertices[i1 * 3]
-        v1y = vertices[i1 * 3 + 1]
-        v1z = vertices[i1 * 3 + 2]
-        
-        v2x = vertices[i2 * 3]
-        v2y = vertices[i2 * 3 + 1]
-        v2z = vertices[i2 * 3 + 2]
-        
-        e1x = v1x - v0x
-        e1y = v1y - v0y
-        e1z = v1z - v0z
-        
-        e2x = v2x - v0x
-        e2y = v2y - v0y
-        e2z = v2z - v0z
-        
-        hx = rd_y * e2z - rd_z * e2y
-        hy = rd_z * e2x - rd_x * e2z
-        hz = rd_x * e2y - rd_y * e2x
-        
-        a = e1x * hx + e1y * hy + e1z * hz
-        if a > -0.00001 and a < 0.00001:
-            continue
-            
-        f = 1.0 / a
-        sx = ro_x - v0x
-        sy = ro_y - v0y
-        sz = ro_z - v0z
-        
-        u = f * (sx * hx + sy * hy + sz * hz)
-        if u < 0.0 or u > 1.0:
-            continue
-            
-        qx = sy * e1z - sz * e1y
-        qy = sz * e1x - sx * e1z
-        qz = sx * e1y - sy * e1x
-        
-        v = f * (rd_x * qx + rd_y * qy + rd_z * qz)
-        if v < 0.0 or u + v > 1.0:
-            continue
-            
-        t = f * (e2x * qx + e2y * qy + e2z * qz)
-        
-        if t > 0.00001 and t < closest_t:
-            closest_t = t
-            hit = 1
-            # Normal calculation
-            best_nx = e1y * e2z - e1z * e2y
-            best_ny = e1z * e2x - e1x * e2z
-            best_nz = e1x * e2y - e1y * e2x
-            
-            len_n = sqrt(best_nx*best_nx + best_ny*best_ny + best_nz*best_nz)
-            if len_n > 0.00001:
-                best_nx /= len_n
-                best_ny /= len_n
-                best_nz /= len_n
-                
-    if hit:
-        output[0] = 1.0
-        output[1] = closest_t
-        output[2] = best_nx
-        output[3] = best_ny
-        output[4] = best_nz
