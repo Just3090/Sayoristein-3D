@@ -9,3 +9,6 @@ Compile .so for linux:
 gcc -shared -pthread -fPIC -fwrapv -O3 -Wall -fno-strict-aliasing \
     $(python3-config --includes) \
     stein_core.c -o stein_core.so
+
+COmpile raylib linux:
+gcc game/core/raylib_server.c -o game/core/raylib_server -I./raylib-5.0_linux_amd64/include ./raylib-5.0_linux_amd64/lib/libraylib.a -lm -lpthread

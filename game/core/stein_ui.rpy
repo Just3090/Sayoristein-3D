@@ -338,15 +338,15 @@ screen sayoristein_level_select():
 
         textbutton _("Level 1") action Jump("start_level_1") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
         
-        if persistent.stein_level1_cleared:
-            textbutton _("Level 2") action Jump("start_level_2") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
-        else:
-            textbutton _("Level 2 (Locked)") action Show("stein_locked_message", msg=__("Complete Level 1 first!")) style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
+        # if persistent.stein_level1_cleared:
+        textbutton _("Level 2") action Jump("start_level_2") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
+        # else:
+            # textbutton _("Level 2 (Locked)") action Show("stein_locked_message", msg=__("Complete Level 1 first!")) style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
         
-        if persistent.stein_level2_cleared:
-            textbutton _("Level 3") action Jump("start_level_3") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
-        else:
-            textbutton _("Level 3 (Locked)") action Show("stein_locked_message", msg=__("Complete Level 2 first!")) style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
+        # if persistent.stein_level2_cleared:
+        textbutton _("Level 3") action Jump("start_level_3") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
+        # else:
+        #     textbutton _("Level 3 (Locked)") action Show("stein_locked_message", msg=__("Complete Level 2 first!")) style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
         
         # if persistent.stein_level3_cleared:
         textbutton _("Arena Mode") action ShowMenu("sayoristein_arena_hub") style "sayoristein_menu_button" text_style "sayoristein_menu_button_text"
