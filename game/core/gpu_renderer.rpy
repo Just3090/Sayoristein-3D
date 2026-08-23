@@ -222,6 +222,8 @@ init -10 python:
                     else:
                         self.destroy()
                         return "quit"
+                if self.mouse_grabbed:
+                    raise renpy.IgnoreEvent()
             elif ev.type == pygame.KEYUP:
                 if ev.key == pygame.K_w: self.keys['w'] = False
                 elif ev.key == pygame.K_s: self.keys['s'] = False
@@ -234,6 +236,8 @@ init -10 python:
                 elif ev.key == pygame.K_SPACE: self.keys['space'] = False
                 elif ev.key == pygame.K_LSHIFT: self.keys['shift'] = False
                 elif ev.key == pygame.K_LCTRL: self.keys['ctrl'] = False
+                if self.mouse_grabbed:
+                    raise renpy.IgnoreEvent()
             return None
 
         def render(self, width, height, st, at):
