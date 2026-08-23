@@ -1,4 +1,5 @@
 #include "raylib.h"
+#include "raymath.h"
 #include <math.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -39,6 +40,7 @@ typedef struct {
   float timer;
   float hp;
   float move_timer;
+  int anim_frame;
 } Enemy;
 
 typedef struct {
@@ -279,6 +281,12 @@ int main(int argc, char *argv[]) {
   sprite_tex[13] = LoadTexture("game/pics/items/random_gun_i.png");
   sprite_tex[14] = LoadTexture("game/pics/items/bullet_red.png");
   sprite_tex[15] = LoadTexture("game/pics/items/minigun.png");
+
+  Model guyModel = LoadModel("game/models/monika_walk.glb");
+
+  int guyAnimsCount = 0;
+  ModelAnimation *guyAnims =
+      LoadModelAnimations("game/models/monika_walk.glb", &guyAnimsCount);
 
   Mesh cubeMesh = GenMeshCube(2.0f, 2.0f, 2.0f);
   Model cubeModel = LoadModelFromMesh(cubeMesh);
@@ -685,20 +693,44 @@ int main(int argc, char *argv[]) {
 
     for (int i = 0; i < num_enemies; i++) {
       if (enemies[i].state >= 0) { // render if not completely inactive
-        Texture2D tex = sprite_tex[4];
-        Texture2D dead_tex = sprite_tex[5];
+        if (enemies[i].type != 5 && enemies[i].type != 1) {
 
-        if (enemies[i].type == 5 || enemies[i].type == 1) { // yuritler
-          tex = sprite_tex[9];
-          dead_tex = sprite_tex[10];
+          if (enemies[i].state < 3) {
+            enemies[i].move_timer += GetFrameTime();
+            if (enemies[i].move_timer > 1.0f / 30.0f) {
+              enemies[i].anim_frame++;
+              enemies[i].move_timer = 0.0f;
+            }
+            if (guyAnimsCount > 0) {
+              int max_frames = guyAnims[0].frameCount;
+              if (enemies[i].anim_frame >= max_frames)
+                enemies[i].anim_frame = 0;
+              UpdateModelAnimation(guyModel, guyAnims[0],
+                                   enemies[i].anim_frame);
+            }
+          }
+
+          float dx = camera.position.x - enemies[i].x;
+          float dz = camera.position.z - enemies[i].z;
+          float angle = atan2f(dx, dz) * RAD2DEG;
+
+          Vector3 pos = {enemies[i].x, enemies[i].y, enemies[i].z};
+
+          DrawModelEx(guyModel, pos, (Vector3){0, 1, 0}, angle,
+                      (Vector3){0.5f, 0.5f, 0.5f},
+                      (enemies[i].state >= 3) ? GRAY : WHITE);
+
+        } else {
+          Texture2D tex = sprite_tex[9];
+          Texture2D dead_tex = sprite_tex[10];
+
+          if (enemies[i].state >= 3) {
+            tex = dead_tex;
+          }
+
+          Vector3 pos = {enemies[i].x, enemies[i].y + 1.0f, enemies[i].z};
+          DrawBillboard(camera, tex, pos, 2.0f, WHITE);
         }
-
-        if (enemies[i].state >= 3) {
-          tex = dead_tex;
-        }
-
-        Vector3 pos = {enemies[i].x, enemies[i].y + 1.0f, enemies[i].z};
-        DrawBillboard(camera, tex, pos, 2.0f, WHITE);
       }
     }
 
