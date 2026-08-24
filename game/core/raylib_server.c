@@ -154,7 +154,7 @@ void *input_listener(void *arg) {
       current_cam.shadows_enabled = packet.shadows_enabled;
       pthread_mutex_unlock(&input_mutex);
     } else {
-      break;
+      exit(0);
     }
   }
   return NULL;

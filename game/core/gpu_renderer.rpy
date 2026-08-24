@@ -46,13 +46,19 @@ init -10 python:
             try:
                 log_path = os.path.join(config.gamedir, "core", "server_log.txt")
                 self.log_file = open(log_path, "w")
+                
+                kwargs = {}
+                if renpy.windows:
+                    kwargs["creationflags"] = 0x08000000
+                    
                 self.process = subprocess.Popen(
                     [exe_path], 
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE, 
                     stderr=self.log_file, 
                     cwd=config.basedir,
-                    bufsize=0
+                    bufsize=0,
+                    **kwargs
                 )
                 self.running = True
             except Exception as e:

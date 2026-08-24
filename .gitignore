@@ -49,5 +49,6 @@ raylib_server
 raylib-5.0_linux_amd64/
 *.bak
 server_log.txt
+raylib-5.0_win64_mingw-w64/
 
 !raylib_server.c

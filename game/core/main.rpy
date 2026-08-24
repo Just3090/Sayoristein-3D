@@ -50,10 +50,11 @@ init python:
         config.keymap['screenshot'].remove('alt_s')
 
     def stein_require_native():
-        if getattr(store, "stein_native_available", False):
-            return True
-        renpy.notify(_("Sayoristein 3D is unavailable in this build."))
-        return False
+        # if getattr(store, "stein_native_available", False):
+        #     return True
+        # renpy.notify(_("Sayoristein 3D is unavailable in this build."))
+        # return False
+        return True
 
     stein_lighting_presets = {
         "night": {
