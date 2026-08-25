@@ -7,4 +7,6 @@ A project to use 3D on Ren'Py, mainly for [Just Sayori](https://github.com/New-T
 
 Download raylib 5.0: [https://github.com/raysan5/raylib/releases/tag/5.0](https://github.com/raysan5/raylib/releases/tag/5.0)
 
-Follow examples at `game/notes.txt` to compile the library.
+Follow examples at `game/core/notes.txt` to compile the library.
+
+Use Ren'Py 8.4.1.
