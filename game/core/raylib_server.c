@@ -183,6 +183,10 @@ typedef struct {
   int shotgun_lvl;
   int minigun_lvl;
   int flashlight_active;
+  float wp_hip_x, wp_hip_y, wp_hip_z;
+  float wp_ads_x, wp_ads_y, wp_ads_z;
+  float wp_pitch, wp_yaw, wp_roll;
+  float wp_scale;
 } InputPacket;
 
 typedef struct {
@@ -215,6 +219,20 @@ WeaponDef weapons[4] = {
     { 0.38f, 50.0f, 1, 0.00f, 0.05f, 15.0f },  // 1: pistol
     { 1.4f,  35.0f, 5, 0.15f, 0.12f, 30.0f },  // 2: shotgun
     { 0.05f, 40.0f, 1, 0.05f, 0.02f, 5.0f }    // 3: minigun
+};
+
+typedef struct {
+    Vector3 hip_pos;
+    Vector3 ads_pos;
+    float pitch, yaw, roll;
+    float scale;
+} WeaponTransform;
+
+WeaponTransform default_weapon_transforms[4] = {
+    { {0.055f, -0.019f, -0.1f}, {0.036f, -0.014f, -0.11f}, 0.0f, 180.0f, 0.0f, 0.301f }, // fist/sword
+    { {0.05f, -0.05f, -0.1f}, {0.0f, -0.0244f, -0.052f}, 0.0f, 180.0f, 0.0f, 0.3f }, // pistol
+    { {0.048f, -0.039f, -0.1f}, {0.0f, -0.0236f, -0.07f}, 0.0f, 180.0f, 0.0f, 0.775f }, // shotgun
+    { {0.058f, -0.085f, -0.1f}, {0.0f, -0.085f, -0.073f}, 0.0f, 180.0f, 0.0f, 0.521f }  // minigun
 };
 
 static pthread_mutex_t input_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -256,6 +274,16 @@ void *input_listener(void *arg) {
       current_input.shotgun_lvl = packet.shotgun_lvl;
       current_input.minigun_lvl = packet.minigun_lvl;
       current_input.flashlight_active = packet.flashlight_active;
+      current_input.wp_hip_x = packet.wp_hip_x;
+      current_input.wp_hip_y = packet.wp_hip_y;
+      current_input.wp_hip_z = packet.wp_hip_z;
+      current_input.wp_ads_x = packet.wp_ads_x;
+      current_input.wp_ads_y = packet.wp_ads_y;
+      current_input.wp_ads_z = packet.wp_ads_z;
+      current_input.wp_pitch = packet.wp_pitch;
+      current_input.wp_yaw = packet.wp_yaw;
+      current_input.wp_roll = packet.wp_roll;
+      current_input.wp_scale = packet.wp_scale;
       pthread_mutex_unlock(&input_mutex);
     } else {
       exit(0);
@@ -544,7 +572,21 @@ int main(int argc, char *argv[]) {
   sprite_tex[15] = LoadTexture("game/pics/items/minigun.png");
 
   Model guyModel = LoadModel("game/models/monika_walk.glb");
-  Model weaponModel = LoadModel("game/models/hk_usp.glb");
+  
+  Model weaponModels[4];
+  const char *weapon_model_paths[4] = {
+      "game/models/crimson.glb",
+      "game/models/hk_usp.glb",
+      "game/models/shotgun.glb",
+      "game/models/minigun.glb"
+  };
+  for (int i = 0; i < 4; i++) {
+      if (FileExists(weapon_model_paths[i])) {
+          weaponModels[i] = LoadModel(weapon_model_paths[i]);
+      } else {
+          weaponModels[i] = LoadModel("game/models/hk_usp.glb");
+      }
+  }
 
   int guyAnimsCount = 0;
   ModelAnimation *guyAnims =
@@ -1204,15 +1246,32 @@ int main(int argc, char *argv[]) {
 
     float bob_x = sinf(bob_time / 2.0f) * 0.005f * bob_amp;
     float bob_y = cosf(bob_time) * 0.005f * bob_amp;
+
+    int cur_wp = current_input.active_weapon;
+    if (cur_wp < 0 || cur_wp >= 4) cur_wp = 1;
+    WeaponTransform def = default_weapon_transforms[cur_wp];
+
+    float base_hip_x = def.hip_pos.x + current_input.wp_hip_x;
+    float base_hip_y = def.hip_pos.y + current_input.wp_hip_y;
+    float base_hip_z = def.hip_pos.z + current_input.wp_hip_z;
+
+    float base_ads_x = def.ads_pos.x + current_input.wp_ads_x;
+    float base_ads_y = def.ads_pos.y + current_input.wp_ads_y;
+    float base_ads_z = def.ads_pos.z + current_input.wp_ads_z;
+
+    float base_pitch = def.pitch + current_input.wp_pitch;
+    float base_yaw = def.yaw + current_input.wp_yaw;
+    float base_roll = def.roll + current_input.wp_roll;
+    float wp_scale = def.scale + current_input.wp_scale;
+    if (wp_scale < 0.001f) wp_scale = def.scale;
     
-    Vector3 hip_pos = { 0.05f + bob_x, -0.05f + bob_y, -0.1f + recoil_offset_z };
-    Vector3 ads_pos = { 0.0f + bob_x * 0.1f, -0.032f + bob_y * 0.1f, -0.07f + recoil_offset_z };
+    Vector3 hip_pos = { base_hip_x + bob_x, base_hip_y + bob_y, base_hip_z + recoil_offset_z };
+    Vector3 ads_pos = { base_ads_x + bob_x * 0.1f, base_ads_y + bob_y * 0.1f, base_ads_z + recoil_offset_z };
     Vector3 wp_pos = Vector3Lerp(hip_pos, ads_pos, ads_lerp);
-    float wp_scale = 0.3f;
     
-    float wp_pitch = 0.0f + recoil_pitch + sway_y * (1.0f - ads_lerp * 0.5f);
-    float wp_yaw = 180.0f + sway_x * (1.0f - ads_lerp * 0.5f);
-    float wp_roll = sway_x * -0.5f * (1.0f - ads_lerp * 0.5f);
+    float wp_pitch = base_pitch + recoil_pitch + sway_y * (1.0f - ads_lerp * 0.5f);
+    float wp_yaw = base_yaw + sway_x * (1.0f - ads_lerp * 0.5f);
+    float wp_roll = base_roll + sway_x * -0.5f * (1.0f - ads_lerp * 0.5f);
     
     float pitch_rad = wp_pitch * DEG2RAD;
     float yaw_rad = wp_yaw * DEG2RAD;
@@ -1222,9 +1281,9 @@ int main(int argc, char *argv[]) {
     Matrix rotY = MatrixRotateY(yaw_rad);
     Matrix rotZ = MatrixRotateZ(roll_rad);
     
-    weaponModel.transform = MatrixMultiply(MatrixMultiply(rotX, rotY), rotZ);
+    weaponModels[cur_wp].transform = MatrixMultiply(MatrixMultiply(rotX, rotY), rotZ);
     
-    DrawModelEx(weaponModel, wp_pos, (Vector3){0,1,0}, 0.0f, (Vector3){wp_scale, wp_scale, wp_scale}, WHITE);
+    DrawModelEx(weaponModels[cur_wp], wp_pos, (Vector3){0,1,0}, 0.0f, (Vector3){wp_scale, wp_scale, wp_scale}, WHITE);
     
     EndMode3D();
     rlEnableDepthTest();
@@ -1303,7 +1362,9 @@ int main(int argc, char *argv[]) {
   }
   UnloadModel(cubeModel);
   UnloadModel(floorModel);
-  UnloadModel(weaponModel);
+  for (int i = 0; i < 4; i++) {
+    UnloadModel(weaponModels[i]);
+  }
   UnloadShader(lighting_shader);
   UnloadRenderTexture(target);
   UnloadRenderTexture(final_target);

@@ -7,6 +7,7 @@ init -10 python:
     import threading
     import os
     import math
+    import copy
 
     class GPURenpystein(renpy.Displayable):
         def __init__(self, width, height, worldMap=None, exits=[], internal_width=None, internal_height=None, lighting_preset=None, **kwargs):
@@ -50,6 +51,17 @@ init -10 python:
             self.pickup_msg_timer = 0.0
             self.damage_indicators = []
             self.inter_round_timer = 0.0
+            self.show_debug_overlay = False
+            self.dev_edit_mode = 0 # 0: pos, 1: rot, 2: scale
+            self.dev_edit_target = 'hip' # 'hip' or 'ads'
+            
+            self.weapon_offsets = {
+                0: {'hip_x': 0.0, 'hip_y': 0.0, 'hip_z': 0.0, 'ads_x': 0.0, 'ads_y': 0.0, 'ads_z': 0.0, 'pitch': 0.0, 'yaw': 0.0, 'roll': 0.0, 'scale': 0.0},
+                1: {'hip_x': 0.0, 'hip_y': 0.0, 'hip_z': 0.0, 'ads_x': 0.0, 'ads_y': 0.0, 'ads_z': 0.0, 'pitch': 0.0, 'yaw': 0.0, 'roll': 0.0, 'scale': 0.0},
+                2: {'hip_x': 0.0, 'hip_y': 0.0, 'hip_z': 0.0, 'ads_x': 0.0, 'ads_y': 0.0, 'ads_z': 0.0, 'pitch': 0.0, 'yaw': 0.0, 'roll': 0.0, 'scale': 0.0},
+                3: {'hip_x': 0.0, 'hip_y': 0.0, 'hip_z': 0.0, 'ads_x': 0.0, 'ads_y': 0.0, 'ads_z': 0.0, 'pitch': 0.0, 'yaw': 0.0, 'roll': 0.0, 'scale': 0.0},
+            }
+            
             self.return_value = None
             self.exits = exits if exits else []
             self.oldst = None
@@ -221,6 +233,7 @@ init -10 python:
 
         def event(self, ev, x, y, st):
             import pygame
+            import copy
             if self.return_value is not None:
                 rv = self.return_value
                 self.return_value = None
@@ -260,10 +273,71 @@ init -10 python:
                 elif ev.key == pygame.K_LSHIFT: self.keys['shift'] = True
                 elif ev.key == pygame.K_LCTRL: self.keys['ctrl'] = True
                 elif ev.key == pygame.K_f: self.flashlight_active = not self.flashlight_active
+                elif ev.key == pygame.K_F3:
+                    self.show_debug_overlay = not self.show_debug_overlay
                 elif ev.key == pygame.K_1: self.active_weapon = 0
                 elif ev.key == pygame.K_2: self.active_weapon = 1
                 elif ev.key == pygame.K_3: self.active_weapon = 2
                 elif ev.key == pygame.K_4: self.active_weapon = 3
+                elif self.show_debug_overlay and getattr(config, 'developer', True) and ev.key == pygame.K_p:
+                    wp_names = ["SWORD", "PISTOL", "SHOTGUN", "MINIGUN"]
+                    cur_name = wp_names[self.active_weapon] if self.active_weapon < 4 else "UNKNOWN"
+                    t = self.weapon_offsets[self.active_weapon]
+                    print(f"\n")
+                    print(f"// Weapon {self.active_weapon} ({cur_name}) delta offsets:")
+                    print(f"Vector3 hip_offset = {{ {t['hip_x']:+.4f}f, {t['hip_y']:+.4f}f, {t['hip_z']:+.4f}f }};")
+                    print(f"Vector3 ads_offset = {{ {t['ads_x']:+.4f}f, {t['ads_y']:+.4f}f, {t['ads_z']:+.4f}f }};")
+                    print(f"float pitch_offset = {t['pitch']:+.2f}f;")
+                    print(f"float yaw_offset   = {t['yaw']:+.2f}f;")
+                    print(f"float roll_offset  = {t['roll']:+.2f}f;")
+                    print(f"float scale_offset = {t['scale']:+.4f}f;")
+                    print(f"\n")
+                    self.pickup_msg = f"{cur_name} OFFSETS PRINTED TO LOG"
+                    self.pickup_msg_timer = 2.0
+                elif self.show_debug_overlay and getattr(config, 'developer', True):
+                    t = self.weapon_offsets[self.active_weapon]
+                    prefix = 'ads_' if self.dev_edit_target == 'ads' else 'hip_'
+                    
+                    pos_step = 0.001
+                    rot_step = 0.5
+                    scale_step = 0.001
+                    
+                    if self.keys['shift']:
+                        pos_step *= 5.0
+                        rot_step *= 4.0
+                        scale_step *= 5.0
+                    elif self.keys['ctrl']:
+                        pos_step *= 0.2
+                        rot_step *= 0.2
+                        scale_step *= 0.2
+
+                    if ev.key in (pygame.K_KP0, pygame.K_0):
+                        self.dev_edit_mode = (self.dev_edit_mode + 1) % 3
+                    elif ev.key in (pygame.K_KP_DIVIDE, pygame.K_KP_ENTER, pygame.K_TAB):
+                        self.dev_edit_target = 'ads' if self.dev_edit_target == 'hip' else 'hip'
+                    elif ev.key in (pygame.K_KP_PERIOD,):
+                        self.weapon_offsets[self.active_weapon] = {'hip_x':0.0, 'hip_y':0.0, 'hip_z':0.0, 'ads_x':0.0, 'ads_y':0.0, 'ads_z':0.0, 'pitch':0.0, 'yaw':0.0, 'roll':0.0, 'scale':0.0}
+                    elif ev.key in (pygame.K_KP_PLUS, pygame.K_PLUS, pygame.K_EQUALS):
+                        t['scale'] += scale_step
+                    elif ev.key in (pygame.K_KP_MINUS, pygame.K_MINUS):
+                        t['scale'] = max(0.001, t['scale'] - scale_step)
+                    elif self.dev_edit_mode == 0: # pos
+                        if ev.key in (pygame.K_KP4,): t[prefix + 'x'] -= pos_step
+                        elif ev.key in (pygame.K_KP6,): t[prefix + 'x'] += pos_step
+                        elif ev.key in (pygame.K_KP8,): t[prefix + 'y'] += pos_step
+                        elif ev.key in (pygame.K_KP2,): t[prefix + 'y'] -= pos_step
+                        elif ev.key in (pygame.K_KP7,): t[prefix + 'z'] += pos_step
+                        elif ev.key in (pygame.K_KP9,): t[prefix + 'z'] -= pos_step
+                    elif self.dev_edit_mode == 1: # rot
+                        if ev.key in (pygame.K_KP4,): t['yaw'] -= rot_step
+                        elif ev.key in (pygame.K_KP6,): t['yaw'] += rot_step
+                        elif ev.key in (pygame.K_KP8,): t['pitch'] += rot_step
+                        elif ev.key in (pygame.K_KP2,): t['pitch'] -= rot_step
+                        elif ev.key in (pygame.K_KP7,): t['roll'] += rot_step
+                        elif ev.key in (pygame.K_KP9,): t['roll'] -= rot_step
+                    elif self.dev_edit_mode == 2: # scale
+                        if ev.key in (pygame.K_KP8, pygame.K_KP6): t['scale'] += scale_step
+                        elif ev.key in (pygame.K_KP2, pygame.K_KP4): t['scale'] = max(0.001, t['scale'] - scale_step)
                 elif ev.key == pygame.K_ESCAPE:
                     if self.mouse_grabbed:
                         self.mouse_grabbed = False
@@ -319,7 +393,7 @@ init -10 python:
                     shift_key = 1 if self.keys['shift'] else 0
                     ctrl_key = 1 if self.keys['ctrl'] else 0
                     shoot_key = 1 if self.keys['shoot'] else 0
-                    aim_key = 1 if self.keys['aim'] else 0
+                    aim_key = 1 if (self.keys['aim'] or (self.show_debug_overlay and getattr(config, 'developer', True) and self.dev_edit_target == 'ads')) else 0
                     
                     p_lvl = int(getattr(persistent, "stein_pistol_level", 0))
                     s_lvl = int(getattr(persistent, "stein_shotgun_level", 0))
@@ -331,7 +405,19 @@ init -10 python:
                     if not weather_en_toggle:
                         rain_intensity = 0.0
                     
-                    data = struct.pack("iiii iiii iiii ff f i i i i i f i i iii i", 
+                    t = self.weapon_offsets.get(self.active_weapon, {'hip_x':0.0, 'hip_y':0.0, 'hip_z':0.0, 'ads_x':0.0, 'ads_y':0.0, 'ads_z':0.0, 'pitch':0.0, 'yaw':0.0, 'roll':0.0, 'scale':0.0})
+                    wp_hip_x = float(t['hip_x'])
+                    wp_hip_y = float(t['hip_y'])
+                    wp_hip_z = float(t['hip_z'])
+                    wp_ads_x = float(t['ads_x'])
+                    wp_ads_y = float(t['ads_y'])
+                    wp_ads_z = float(t['ads_z'])
+                    wp_pitch = float(t['pitch'])
+                    wp_yaw = float(t['yaw'])
+                    wp_roll = float(t['roll'])
+                    wp_scale = float(t['scale'])
+                    
+                    data = struct.pack("iiii iiii iiii ff f i i i i i f i i iii i fff fff fff f", 
                                         w_key, s_key, a_key, d_key,
                                         left_key, right_key, up_key, down_key,
                                         space_key, shift_key, ctrl_key, shoot_key,
@@ -339,7 +425,10 @@ init -10 python:
                                         float(time_of_day), int(light_quality), int(shadows_en),
                                         int(self.active_weapon),
                                         bloom_en, clouds_en, rain_intensity, soft_shadows,
-                                        aim_key, p_lvl, s_lvl, m_lvl, fl_val)
+                                        aim_key, p_lvl, s_lvl, m_lvl, fl_val,
+                                        wp_hip_x, wp_hip_y, wp_hip_z,
+                                        wp_ads_x, wp_ads_y, wp_ads_z,
+                                        wp_pitch, wp_yaw, wp_roll, wp_scale)
                     self.process.stdin.write(data)
                     self.process.stdin.flush()
                     self.mouse_dx = 0.0
@@ -487,7 +576,7 @@ init -10 python:
                 self.pickup_msg_timer = max(0, self.pickup_msg_timer - dt)
                 toast_alpha = int(255 * min(1.0, self.pickup_msg_timer / 0.5))
                 if toast_alpha > 0:
-                    p_txt = Text(self.pickup_msg, size=36, color="#FFFF00", outlines=[(3, "#000000", 0, 0)], font="mod_assets/fonts/BebasNeue-Regular.ttf")
+                    p_txt = Text(self.pickup_msg, size=36, color="#FFFF00", outlines=[(3, "#000000", 0, 0)], font="mod_assets/fonts/BebasNeue-Regular.ttf", substitute=False)
                     pt_render = renpy.render(p_txt, self.width, self.height, st, at)
                     pw, ph = pt_render.get_size()
                     render.blit(pt_render, (self.width / 2 - pw / 2, int(self.height * 0.15)))
@@ -496,16 +585,16 @@ init -10 python:
                 self.inter_round_timer = max(0.0, self.inter_round_timer - dt)
                 cur_rnd = getattr(renpy.store, "stein_current_round", 0)
                 next_rnd = cur_rnd + 1
-                b_txt = Text(f"ROUND {next_rnd} STARTING IN: {self.inter_round_timer:.1f}", size=36, color="#FFD700", outlines=[(3, "#000000", 0, 0)], font="mod_assets/fonts/BebasNeue-Regular.ttf")
+                b_txt = Text(f"ROUND {next_rnd} STARTING IN: {self.inter_round_timer:.1f}", size=36, color="#FFD700", outlines=[(3, "#000000", 0, 0)], font="mod_assets/fonts/BebasNeue-Regular.ttf", substitute=False)
                 b_render = renpy.render(b_txt, self.width, self.height, st, at)
                 bw, bh = b_render.get_size()
                 render.blit(b_render, (self.width / 2 - bw / 2, 40))
 
             hp_int = int(cur_hp)
             hp_color = "#00FF00" if hp_int >= 60 else ("#FFFF00" if hp_int >= 30 else "#FF0000")
-            wp_names = ["FIST", "PISTOL", "SHOTGUN", "MINIGUN"]
+            wp_names = ["SWORD", "PISTOL", "SHOTGUN", "MINIGUN"]
             cur_wp_name = wp_names[self.active_weapon] if self.active_weapon < 4 else "PISTOL"
-            hud_txt = Text(f"HP: {hp_int}%  |  WEAPON: {cur_wp_name}", size=32, color=hp_color, outlines=[(2, "#000000", 0, 0)], font="mod_assets/fonts/BebasNeue-Regular.ttf")
+            hud_txt = Text(f"HP: {hp_int}%  |  WEAPON: {cur_wp_name}", size=32, color=hp_color, outlines=[(2, "#000000", 0, 0)], font="mod_assets/fonts/BebasNeue-Regular.ttf", substitute=False)
             hud_r = renpy.render(hud_txt, self.width, self.height, st, at)
             render.blit(hud_r, (30, self.height - 50))
 
@@ -513,10 +602,74 @@ init -10 python:
                 cur_rnd = getattr(renpy.store, "stein_current_round", 1)
                 kills = getattr(persistent, "stein_kills", 0)
                 coins = getattr(renpy.store, "stein_session_coins", 0)
-                arena_txt = Text(f"ROUND: {cur_rnd}  |  KILLS: {kills}  |  COINS: {coins}", size=32, color="#FFD700", outlines=[(2, "#000000", 0, 0)], font="mod_assets/fonts/BebasNeue-Regular.ttf")
+                arena_txt = Text(f"ROUND: {cur_rnd}  |  KILLS: {kills}  |  COINS: {coins}", size=32, color="#FFD700", outlines=[(2, "#000000", 0, 0)], font="mod_assets/fonts/BebasNeue-Regular.ttf", substitute=False)
                 arena_r = renpy.render(arena_txt, self.width, self.height, st, at)
                 aw, ah = arena_r.get_size()
                 render.blit(arena_r, (self.width - aw - 30, self.height - 50))
+
+            # F3 debug overlay
+            if self.show_debug_overlay:
+                p_x = getattr(self, 'x', 0.0)
+                p_y = getattr(self, 'y', 0.0)
+                p_z = getattr(self, 'z', 0.0)
+                p_yaw = self.yaw % 360.0
+                p_pitch = getattr(self, 'pitch', 0.0)
+                
+                left_lines = [
+                    "DEBUG",
+                    f"POS: X:{p_x:.2f}  Y:{p_y:.2f}  Z:{p_z:.2f}",
+                    f"VIEW: YAW:{p_yaw:.1f}°  PITCH:{p_pitch:.1f}°",
+                    f"KEYS: ({'W' if self.keys['w'] else '-'}) ({'A' if self.keys['a'] else '-'}) ({'S' if self.keys['s'] else '-'}) ({'D' if self.keys['d'] else '-'}) ({'SPACE' if self.keys['space'] else '-'}) ({'SHIFT' if self.keys['shift'] else '-'}) ({'CTRL' if self.keys['ctrl'] else '-'}) ({'AIM' if self.keys['aim'] else '-'})",
+                    f"ENGINE: TIME:{time_of_day:.1f}h | FLASHLIGHT:{'ON' if self.flashlight_active else 'OFF'}",
+                ]
+                
+                panel_w, panel_h = 420, 26 * len(left_lines) + 20
+                bg_left = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+                bg_left.fill((0, 0, 0, 190))
+                pygame.draw.rect(bg_left, (255, 215, 0, 220), (0, 0, panel_w, panel_h), 2)
+                render.blit(bg_left, (20, 20))
+                
+                for idx, line in enumerate(left_lines):
+                    color = "#FFFF00" if idx == 0 else "#FFFFFF"
+                    l_txt = Text(line, size=20, color=color, outlines=[(1, "#000000", 0, 0)], font="mod_assets/fonts/BebasNeue-Regular.ttf", substitute=False)
+                    l_render = renpy.render(l_txt, self.width, self.height, st, at)
+                    render.blit(l_render, (30, 28 + idx * 24))
+
+                if getattr(config, 'developer', True):
+                    t = self.weapon_offsets.get(self.active_weapon, {'hip_x':0.0, 'hip_y':0.0, 'hip_z':0.0, 'ads_x':0.0, 'ads_y':0.0, 'ads_z':0.0, 'pitch':0.0, 'yaw':0.0, 'roll':0.0, 'scale':0.0})
+                    mode_names = ["POSITION", "ROTATION", "SCALE"]
+                    cur_mode_str = mode_names[self.dev_edit_mode]
+                    cur_target_str = "HIPFIRE" if self.dev_edit_target == 'hip' else "ADS AIM"
+                    
+                    right_lines = [
+                        "VIEWMODEL GIZMO (DEV MODE)",
+                        f"ACTIVE WEAPON: {cur_wp_name} (ID: {self.active_weapon})",
+                        f"EDIT TARGET: ({cur_target_str})  (Tab / Numpad /)",
+                        f"EDIT MODE:   ({cur_mode_str})  (Numpad 0)",
+                        f"OFFSET HIP: X:{t['hip_x']:+.4f}  Y:{t['hip_y']:+.4f}  Z:{t['hip_z']:+.4f}",
+                        f"OFFSET ADS: X:{t['ads_x']:+.4f}  Y:{t['ads_y']:+.4f}  Z:{t['ads_z']:+.4f}",
+                        f"OFFSET ROT: P:{t['pitch']:+.1f}°  Y:{t['yaw']:+.1f}°  R:{t['roll']:+.1f}°",
+                        f"OFFSET SCALE: {t['scale']:+.4f}",
+                        "(NUMPAD 4/6) +/- X/Yaw   (8/2) +/- Y/Pitch   (7/9) +/- Z/Roll",
+                        "(NUMPAD +/-) Scale   (.) Reset        (P) Print to Log",
+                        "(SHIFT: Fast 5x  |  CTRL: Ultra-Fine 0.2x)",
+                    ]
+                    
+                    r_panel_w, r_panel_h = 440, 24 * len(right_lines) + 20
+                    r_px = self.width - r_panel_w - 20
+                    bg_right = pygame.Surface((r_panel_w, r_panel_h), pygame.SRCALPHA)
+                    bg_right.fill((0, 0, 0, 190))
+                    pygame.draw.rect(bg_right, (0, 255, 255, 220), (0, 0, r_panel_w, r_panel_h), 2)
+                    render.blit(bg_right, (r_px, 20))
+                    
+                    for idx, line in enumerate(right_lines):
+                        if idx == 0: color = "#00FFFF"
+                        elif idx in (2, 3): color = "#FFD700"
+                        elif idx >= 8: color = "#00FF88"
+                        else: color = "#FFFFFF"
+                        r_txt = Text(line, size=19, color=color, outlines=[(1, "#000000", 0, 0)], font="mod_assets/fonts/BebasNeue-Regular.ttf", substitute=False)
+                        r_render = renpy.render(r_txt, self.width, self.height, st, at)
+                        render.blit(r_render, (r_px + 12, 26 + idx * 23))
 
             if self.return_value:
                 renpy.timeout(0)
