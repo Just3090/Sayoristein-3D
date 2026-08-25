@@ -32,13 +32,39 @@ init -10 python:
             
             self.keys = {'w':False, 's':False, 'a':False, 'd':False, 
                         'left':False, 'right':False, 'up':False, 'down':False,
-                        'space':False, 'shift':False, 'ctrl':False, 'shoot':False}
+                        'space':False, 'shift':False, 'ctrl':False, 'shoot':False, 'aim':False}
+            self.active_weapon = 1
             
             self.event_queue = []
             
             self.mouse_grabbed = False
             self.mouse_dx = 0.0
             self.mouse_dy = 0.0
+            self.flashlight_active = False
+            
+            self.time_since_last_damage = 0.0
+            self.damage_flash_timer = 0.0
+            self.heal_flash_timer = 0.0
+            self.hit_marker_timer = 0.0
+            self.pickup_msg = ""
+            self.pickup_msg_timer = 0.0
+            self.damage_indicators = []
+            self.return_value = None
+            self.exits = exits if exits else []
+            self.oldst = None
+            
+            renpy.store.stein_player_health = 100
+            renpy.store.stein_session_coins = 0
+            
+            try:
+                self.sight_img = pygame.image.load(os.path.join(config.gamedir, "pics", "gui", "sight.png")).convert_alpha()
+                self.arrow_img = pygame.image.load(os.path.join(config.gamedir, "pics", "gui", "arrow_d.webp")).convert_alpha()
+                self.hit_marker_img = pygame.image.load(os.path.join(config.gamedir, "pics", "gui", "damage_x.webp")).convert_alpha()
+            except Exception as e:
+                print(f"Failed to load images: {e}")
+                self.sight_img = None
+                self.arrow_img = None
+                self.hit_marker_img = None
             
             exe_name = "raylib_server.exe" if renpy.windows else "raylib_server"
             exe_path = os.path.join(config.gamedir, "core", exe_name)
@@ -194,20 +220,32 @@ init -10 python:
 
         def event(self, ev, x, y, st):
             import pygame
-            if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
-                if not self.mouse_grabbed:
-                    self.mouse_grabbed = True
-                    pygame.mouse.set_visible(False)
-                    pygame.event.set_grab(True)
-                else:
-                    self.keys['shoot'] = True
-            elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
-                self.keys['shoot'] = False
+            if self.return_value is not None:
+                rv = self.return_value
+                self.return_value = None
+                return rv
+
+            if ev.type == pygame.MOUSEBUTTONDOWN:
+                if ev.button == 1:
+                    if not self.mouse_grabbed:
+                        self.mouse_grabbed = True
+                        pygame.mouse.set_visible(False)
+                        pygame.event.set_grab(True)
+                    else:
+                        self.keys['shoot'] = True
+                elif ev.button == 3:
+                    self.keys['aim'] = True
+            elif ev.type == pygame.MOUSEBUTTONUP:
+                if ev.button == 1:
+                    self.keys['shoot'] = False
+                elif ev.button == 3:
+                    self.keys['aim'] = False
             elif ev.type == pygame.MOUSEMOTION and self.mouse_grabbed:
                 sens = getattr(persistent, "stein_mouse_sens", 1.0)
                 dx, dy = ev.rel
                 self.mouse_dx += dx * 0.2 * sens
                 self.mouse_dy -= dy * 0.2 * sens
+                self.yaw += dx * 0.2 * sens
             elif ev.type == pygame.KEYDOWN:
                 if ev.key == pygame.K_w: self.keys['w'] = True
                 elif ev.key == pygame.K_s: self.keys['s'] = True
@@ -220,6 +258,11 @@ init -10 python:
                 elif ev.key == pygame.K_SPACE: self.keys['space'] = True
                 elif ev.key == pygame.K_LSHIFT: self.keys['shift'] = True
                 elif ev.key == pygame.K_LCTRL: self.keys['ctrl'] = True
+                elif ev.key == pygame.K_f: self.flashlight_active = not self.flashlight_active
+                elif ev.key == pygame.K_1: self.active_weapon = 0
+                elif ev.key == pygame.K_2: self.active_weapon = 1
+                elif ev.key == pygame.K_3: self.active_weapon = 2
+                elif ev.key == pygame.K_4: self.active_weapon = 3
                 elif ev.key == pygame.K_ESCAPE:
                     if self.mouse_grabbed:
                         self.mouse_grabbed = False
@@ -247,11 +290,21 @@ init -10 python:
             return None
 
         def render(self, width, height, st, at):
+            if self.oldst is None:
+                self.oldst = st
+            dt = st - self.oldst
+            self.oldst = st
+            if dt > 0.1:
+                dt = 0.1
+
             if self.running and self.process.stdin:
                 try:
                     time_of_day = getattr(renpy.store, "u_time_of_day", 12.0)
                     light_quality = getattr(persistent, "stein_lighting_quality", 0)
                     shadows_en = 1 if getattr(persistent, "stein_enable_shadows", False) else 0
+                    bloom_en = 1 if getattr(persistent, "stein_enable_bloom", False) else 0
+                    clouds_en = 1 if getattr(persistent, "stein_volumetric_clouds", False) else 0
+                    soft_shadows = 1 if getattr(persistent, "stein_soft_shadows", False) else 0
                     
                     w_key = 1 if self.keys['w'] else 0
                     s_key = 1 if self.keys['s'] else 0
@@ -265,13 +318,27 @@ init -10 python:
                     shift_key = 1 if self.keys['shift'] else 0
                     ctrl_key = 1 if self.keys['ctrl'] else 0
                     shoot_key = 1 if self.keys['shoot'] else 0
+                    aim_key = 1 if self.keys['aim'] else 0
                     
-                    data = struct.pack("iiii iiii iiii ff f i i", 
+                    p_lvl = int(getattr(persistent, "stein_pistol_level", 0))
+                    s_lvl = int(getattr(persistent, "stein_shotgun_level", 0))
+                    m_lvl = int(getattr(persistent, "stein_minigun_level", 0))
+                    fl_val = 1 if self.flashlight_active else 0
+                    
+                    weather_en_toggle = getattr(persistent, "stein_enable_weather", False)
+                    rain_intensity = float(getattr(renpy.store, "u_rain_intensity", 0.0))
+                    if not weather_en_toggle:
+                        rain_intensity = 0.0
+                    
+                    data = struct.pack("iiii iiii iiii ff f i i i i i f i i iii i", 
                                         w_key, s_key, a_key, d_key,
                                         left_key, right_key, up_key, down_key,
                                         space_key, shift_key, ctrl_key, shoot_key,
                                         float(self.mouse_dx), float(self.mouse_dy),
-                                        float(time_of_day), int(light_quality), int(shadows_en))
+                                        float(time_of_day), int(light_quality), int(shadows_en),
+                                        int(self.active_weapon),
+                                        bloom_en, clouds_en, rain_intensity, soft_shadows,
+                                        aim_key, p_lvl, s_lvl, m_lvl, fl_val)
                     self.process.stdin.write(data)
                     self.process.stdin.flush()
                     self.mouse_dx = 0.0
@@ -284,28 +351,161 @@ init -10 python:
                 if ev_id == 1:
                     if ev_val == 7: # medkit
                         renpy.store.stein_player_health = min(100, getattr(renpy.store, "stein_player_health", 100) + 25)
+                        self.heal_flash_timer = 0.2
+                        self.pickup_msg = "+25 HEALTH"
+                        self.pickup_msg_timer = 2.0
+                        renpy.sound.play("sounds/pew.ogg", channel="sound")
+                    elif ev_val == 8: # cookie
+                        renpy.store.stein_player_health = 100
+                        self.heal_flash_timer = 0.3
+                        self.pickup_msg = "FULL HEALTH RESTORED"
+                        self.pickup_msg_timer = 3.0
                         renpy.sound.play("sounds/pew.ogg", channel="sound")
                     elif ev_val == 11 or ev_val == 12: # coins
-                        renpy.store.stein_session_coins += 1
+                        renpy.store.stein_session_coins += 100
+                        self.pickup_msg = "+100 COINS"
+                        self.pickup_msg_timer = 2.0
                         renpy.sound.play("sounds/pew.ogg", channel="sound")
-                    elif ev_val == 13 or ev_val == 15: # weapons
+                    elif ev_val == 13: # shotgun
+                        renpy.store.stein_has_shotgun = True
+                        self.pickup_msg = "SHOTGUN ACQUIRED"
+                        self.pickup_msg_timer = 3.0
                         renpy.sound.play("sounds/pew.ogg", channel="sound")
+                    elif ev_val == 15: # minigun
+                        renpy.store.stein_has_minigun = True
+                        self.pickup_msg = "MINIGUN ACQUIRED"
+                        self.pickup_msg_timer = 3.0
+                        renpy.sound.play("sounds/pew.ogg", channel="sound")
+                elif ev_id == 20: # weapon fired
+                    if ev_val == 0: renpy.sound.play("sounds/punch.ogg", channel="audio")
+                    elif ev_val == 1: renpy.sound.play("sounds/gunshot.ogg", channel="audio")
+                    elif ev_val == 2: renpy.sound.play("sounds/shotgun.ogg", channel="audio")
+                    elif ev_val == 3: renpy.sound.play("sounds/gunshot.ogg", channel="audio")
                 elif ev_id == 10: # enemy hit
-                    pass
+                    self.hit_marker_timer = 0.15
+                    renpy.sound.play("sounds/ow.ogg", channel="sound")
                 elif ev_id == 11: # enemy dead
                     renpy.store.persistent.stein_kills += 1
                     renpy.sound.play("sounds/ow.ogg", channel="sound")
-                elif ev_id == 12: # enemy attack
+                elif ev_id == 12: # player damaged
+                    self.damage_flash_timer = 0.2
+                    self.time_since_last_damage = 0.0
                     renpy.sound.play("sounds/e-gunshot.ogg", channel="sound")
                     renpy.store.stein_player_health -= 10
                     if renpy.store.stein_player_health < 0:
                         renpy.store.stein_player_health = 0
+                    self.damage_indicators.append({
+                        'world_angle': float(ev_val),
+                        'duration': 1.5,
+                        'max_duration': 1.5
+                    })
+
+            self.time_since_last_damage += dt
+            if self.time_since_last_damage > 2.5 and renpy.store.stein_player_health < 100 and renpy.store.stein_player_health > 0:
+                renpy.store.stein_player_health = min(100.0, renpy.store.stein_player_health + 31.67 * dt)
+
+            if renpy.store.stein_player_health <= 0:
+                renpy.store.stein_player_health = 0
+                if self.return_value is None:
+                    if self.is_arena_mode:
+                        renpy.store.last_arena_round = getattr(renpy.store, "stein_current_round", 1)
+                        renpy.store.new_highscore = False
+                        if renpy.store.last_arena_round > getattr(persistent, "sayoristein_arena_highscore", 0):
+                            persistent.sayoristein_arena_highscore = renpy.store.last_arena_round
+                            renpy.store.new_highscore = True
+                        self.return_value = 'game_over_arena'
+                    else:
+                        self.return_value = 'game_over'
+                    pygame.mouse.set_visible(True)
+                    pygame.event.set_grab(False)
+                    self.destroy()
+                    renpy.timeout(0)
 
             render = renpy.Render(self.width, self.height)
             if self.surface:
                 scaled = pygame.transform.scale(self.surface, (self.width, self.height))
                 render.blit(scaled, (0, 0))
-                
+
+            if self.damage_flash_timer > 0:
+                self.damage_flash_timer = max(0, self.damage_flash_timer - dt)
+            flash_alpha = int(140 * (self.damage_flash_timer / 0.2)) if self.damage_flash_timer > 0 else 0
+            cur_hp = getattr(renpy.store, "stein_player_health", 100)
+            health_alpha = int(((70.0 - cur_hp) / 70.0) * 160) if cur_hp < 70 else 0
+            red_alpha = min(255, max(flash_alpha, health_alpha))
+            if red_alpha > 0:
+                flash_surf = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+                flash_surf.fill((255, 0, 0, red_alpha))
+                render.blit(flash_surf, (0, 0))
+
+            if self.heal_flash_timer > 0:
+                self.heal_flash_timer = max(0, self.heal_flash_timer - dt)
+                h_alpha = int(128 * (self.heal_flash_timer / 0.2))
+                if h_alpha > 0:
+                    heal_surf = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+                    heal_surf.fill((0, 255, 0, h_alpha))
+                    render.blit(heal_surf, (0, 0))
+
+            if self.sight_img:
+                sw, sh = self.sight_img.get_size()
+                render.blit(self.sight_img, (self.width / 2 - sw / 2, self.height / 2 - sh / 2))
+
+            if self.hit_marker_timer > 0:
+                self.hit_marker_timer = max(0, self.hit_marker_timer - dt)
+                if self.hit_marker_img:
+                    hw, hh = self.hit_marker_img.get_size()
+                    render.blit(self.hit_marker_img, (self.width / 2 - hw / 2, self.height / 2 - hh / 2))
+
+            center_x = self.width / 2
+            center_y = self.height / 2
+            indicator_radius = 200
+
+            for ind in list(self.damage_indicators):
+                ind['duration'] -= dt
+                if ind['duration'] <= 0:
+                    self.damage_indicators.remove(ind)
+                    continue
+                if self.arrow_img:
+                    alpha_ratio = ind['duration'] / ind['max_duration']
+                    diff_deg = ind['world_angle'] - self.yaw
+                    diff_rad = math.radians(diff_deg)
+                    
+                    ix = center_x + indicator_radius * math.sin(diff_rad)
+                    iy = center_y - indicator_radius * math.cos(diff_rad)
+                    
+                    rot_img = pygame.transform.rotate(self.arrow_img, -diff_deg)
+                    rot_img.set_alpha(int(255 * alpha_ratio))
+                    rw, rh = rot_img.get_size()
+                    render.blit(rot_img, (ix - rw / 2, iy - rh / 2))
+
+            if self.pickup_msg_timer > 0:
+                self.pickup_msg_timer = max(0, self.pickup_msg_timer - dt)
+                toast_alpha = int(255 * min(1.0, self.pickup_msg_timer / 0.5))
+                if toast_alpha > 0:
+                    p_txt = Text(self.pickup_msg, size=36, color="#FFFF00", outlines=[(3, "#000000", 0, 0)], font="mod_assets/fonts/BebasNeue-Regular.ttf")
+                    pt_render = renpy.render(p_txt, self.width, self.height, st, at)
+                    pw, ph = pt_render.get_size()
+                    render.blit(pt_render, (self.width / 2 - pw / 2, int(self.height * 0.15)))
+
+            hp_int = int(cur_hp)
+            hp_color = "#00FF00" if hp_int >= 60 else ("#FFFF00" if hp_int >= 30 else "#FF0000")
+            wp_names = ["FIST", "PISTOL", "SHOTGUN", "MINIGUN"]
+            cur_wp_name = wp_names[self.active_weapon] if self.active_weapon < 4 else "PISTOL"
+            hud_txt = Text(f"HP: {hp_int}%  |  WEAPON: {cur_wp_name}", size=32, color=hp_color, outlines=[(2, "#000000", 0, 0)], font="mod_assets/fonts/BebasNeue-Regular.ttf")
+            hud_r = renpy.render(hud_txt, self.width, self.height, st, at)
+            render.blit(hud_r, (30, self.height - 50))
+
+            if self.is_arena_mode:
+                cur_rnd = getattr(renpy.store, "stein_current_round", 1)
+                kills = getattr(persistent, "stein_kills", 0)
+                coins = getattr(renpy.store, "stein_session_coins", 0)
+                arena_txt = Text(f"ROUND: {cur_rnd}  |  KILLS: {kills}  |  COINS: {coins}", size=32, color="#FFD700", outlines=[(2, "#000000", 0, 0)], font="mod_assets/fonts/BebasNeue-Regular.ttf")
+                arena_r = renpy.render(arena_txt, self.width, self.height, st, at)
+                aw, ah = arena_r.get_size()
+                render.blit(arena_r, (self.width - aw - 30, self.height - 50))
+
+            if self.return_value:
+                renpy.timeout(0)
+
             renpy.redraw(self, 0)
             return render
             
