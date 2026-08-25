@@ -900,6 +900,7 @@ int main(int argc, char *argv[]) {
             }
           } else {
             inter_round_timer = 10.0f;
+            SendEvent(31, 10);
           }
         }
       }
@@ -1265,26 +1266,6 @@ int main(int argc, char *argv[]) {
                    (Vector2){0, 0}, WHITE);
     EndShaderMode();
 
-    if (is_arena_mode) {
-      char ui_text[128];
-      if (active_enemies == 0 && inter_round_timer > 0.0f) {
-        sprintf(ui_text, "ROUND %d STARTING IN: %.1f", current_round + 1,
-                inter_round_timer);
-        int tw = MeasureText(ui_text, 24);
-        int tx = render_width / 2 - tw / 2;
-        int ty = 40;
-        DrawText(ui_text, tx, ty, 24, YELLOW);
-      }
-    }
-
-    DrawText(
-        TextFormat("POS: X:%.1f Y:%.1f Z:%.1f | W:%d S:%d A:%d D:%d | dX:%.1f",
-                   current_cam.x, current_cam.y, current_cam.z, k_w, k_s, k_a,
-                   k_d, mdx),
-        10, 10, 20, YELLOW);
-
-    DrawText(TextFormat("FPS: %i", GetFPS()), render_width - 100,
-             render_height - 30, 20, GREEN);
     EndTextureMode();
 
     Image img = LoadImageFromTexture(final_target.texture);

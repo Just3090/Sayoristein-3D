@@ -49,6 +49,7 @@ init -10 python:
             self.pickup_msg = ""
             self.pickup_msg_timer = 0.0
             self.damage_indicators = []
+            self.inter_round_timer = 0.0
             self.return_value = None
             self.exits = exits if exits else []
             self.oldst = None
@@ -401,6 +402,9 @@ init -10 python:
                     })
                 elif ev_id == 30: # arena round update
                     renpy.store.stein_current_round = ev_val
+                    self.inter_round_timer = 0.0
+                elif ev_id == 31: # arena inter round break
+                    self.inter_round_timer = float(ev_val)
 
             self.time_since_last_damage += dt
             if self.time_since_last_damage > 2.5 and renpy.store.stein_player_health < 100 and renpy.store.stein_player_health > 0:
@@ -487,6 +491,15 @@ init -10 python:
                     pt_render = renpy.render(p_txt, self.width, self.height, st, at)
                     pw, ph = pt_render.get_size()
                     render.blit(pt_render, (self.width / 2 - pw / 2, int(self.height * 0.15)))
+
+            if self.is_arena_mode and self.inter_round_timer > 0.0:
+                self.inter_round_timer = max(0.0, self.inter_round_timer - dt)
+                cur_rnd = getattr(renpy.store, "stein_current_round", 0)
+                next_rnd = cur_rnd + 1
+                b_txt = Text(f"ROUND {next_rnd} STARTING IN: {self.inter_round_timer:.1f}", size=36, color="#FFD700", outlines=[(3, "#000000", 0, 0)], font="mod_assets/fonts/BebasNeue-Regular.ttf")
+                b_render = renpy.render(b_txt, self.width, self.height, st, at)
+                bw, bh = b_render.get_size()
+                render.blit(b_render, (self.width / 2 - bw / 2, 40))
 
             hp_int = int(cur_hp)
             hp_color = "#00FF00" if hp_int >= 60 else ("#FFFF00" if hp_int >= 30 else "#FF0000")
