@@ -1,2 +1,0 @@
-Install Taichi with python 3.12.8:
-pip install taichi --target ./game/python-packages
