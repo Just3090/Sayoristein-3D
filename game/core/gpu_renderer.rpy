@@ -399,6 +399,8 @@ init -10 python:
                         'duration': 1.5,
                         'max_duration': 1.5
                     })
+                elif ev_id == 30: # arena round update
+                    renpy.store.stein_current_round = ev_val
 
             self.time_since_last_damage += dt
             if self.time_since_last_damage > 2.5 and renpy.store.stein_player_health < 100 and renpy.store.stein_player_health > 0:

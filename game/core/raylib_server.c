@@ -275,6 +275,7 @@ static int weather_active = 0;
 void StartNextArenaRound() {
   current_round++;
   inter_round_timer = 0.0f;
+  SendEvent(30, current_round);
 
   // clean up bodys from previous rounds
   int write_idx = 0;
@@ -1227,21 +1228,6 @@ int main(int argc, char *argv[]) {
     EndMode3D();
     rlEnableDepthTest();
 
-    if (is_arena_mode) {
-      char ui_text[128];
-      if (active_enemies == 0 && inter_round_timer > 0.0f) {
-        sprintf(ui_text, "ROUND %d STARTING IN: %.1f", current_round + 1,
-                inter_round_timer);
-        DrawText(ui_text, render_width / 2 - MeasureText(ui_text, 20) / 2, 50,
-                 20, YELLOW);
-      } else {
-        sprintf(ui_text, "ROUND: %d | ENEMIES: %d", current_round,
-                active_enemies);
-        DrawText(ui_text, render_width - MeasureText(ui_text, 20) - 20, 20, 20,
-                 RED);
-      }
-    }
-
     EndTextureMode();
 
     BeginTextureMode(final_target);
@@ -1273,11 +1259,23 @@ int main(int argc, char *argv[]) {
     SetShaderValue(lighting_shader, fl_loc, &fl_val, SHADER_UNIFORM_FLOAT);
     
     BeginShaderMode(lighting_shader);
-    DrawTextureRec(target.texture,
+    DrawTextureRec(target.texture, 
                    (Rectangle){0, 0, (float)target.texture.width,
                                -(float)target.texture.height},
                    (Vector2){0, 0}, WHITE);
     EndShaderMode();
+
+    if (is_arena_mode) {
+      char ui_text[128];
+      if (active_enemies == 0 && inter_round_timer > 0.0f) {
+        sprintf(ui_text, "ROUND %d STARTING IN: %.1f", current_round + 1,
+                inter_round_timer);
+        int tw = MeasureText(ui_text, 24);
+        int tx = render_width / 2 - tw / 2;
+        int ty = 40;
+        DrawText(ui_text, tx, ty, 24, YELLOW);
+      }
+    }
 
     DrawText(
         TextFormat("POS: X:%.1f Y:%.1f Z:%.1f | W:%d S:%d A:%d D:%d | dX:%.1f",
