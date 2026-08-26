@@ -187,6 +187,7 @@ typedef struct {
   float wp_ads_x, wp_ads_y, wp_ads_z;
   float wp_pitch, wp_yaw, wp_roll;
   float wp_scale;
+  float motion_blur_strength;
 } InputPacket;
 
 typedef struct {
@@ -284,6 +285,7 @@ void *input_listener(void *arg) {
       current_input.wp_yaw = packet.wp_yaw;
       current_input.wp_roll = packet.wp_roll;
       current_input.wp_scale = packet.wp_scale;
+      current_input.motion_blur_strength = packet.motion_blur_strength;
       pthread_mutex_unlock(&input_mutex);
     } else {
       exit(0);
@@ -617,6 +619,9 @@ int main(int argc, char *argv[]) {
   int fov_loc = GetShaderLocation(lighting_shader, "u_fovy");
   int flash_loc = GetShaderLocation(lighting_shader, "u_flash_intensity");
   int fl_loc = GetShaderLocation(lighting_shader, "u_flashlight_active");
+  int fl_offset_loc = GetShaderLocation(lighting_shader, "u_flashlight_offset");
+  int mb_strength_loc = GetShaderLocation(lighting_shader, "u_motion_blur_strength");
+  int cam_vel_loc = GetShaderLocation(lighting_shader, "u_cam_velocity");
 
   Camera3D camera = {0};
   camera.up = (Vector3){0.0f, 1.0f, 0.0f};
@@ -1317,6 +1322,21 @@ int main(int argc, char *argv[]) {
     
     float fl_val = current_input.flashlight_active ? 1.0f : 0.0f;
     SetShaderValue(lighting_shader, fl_loc, &fl_val, SHADER_UNIFORM_FLOAT);
+    
+    static float smoothed_vel_x = 0.0f;
+    static float smoothed_vel_y = 0.0f;
+    smoothed_vel_x = Lerp(smoothed_vel_x, mdx, 15.0f * dt);
+    smoothed_vel_y = Lerp(smoothed_vel_y, mdy, 15.0f * dt);
+    Vector2 cam_velocity = (Vector2){ smoothed_vel_x, smoothed_vel_y };
+
+    Vector2 fl_offset = (Vector2){
+        (bob_x * 2.5f - sway_x * 0.003f) * (1.0f - ads_lerp * 0.7f),
+        (-bob_y * 2.5f - sway_y * 0.003f) * (1.0f - ads_lerp * 0.7f)
+    };
+
+    SetShaderValue(lighting_shader, fl_offset_loc, &fl_offset, SHADER_UNIFORM_VEC2);
+    SetShaderValue(lighting_shader, mb_strength_loc, &current_input.motion_blur_strength, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(lighting_shader, cam_vel_loc, &cam_velocity, SHADER_UNIFORM_VEC2);
     
     BeginShaderMode(lighting_shader);
     DrawTextureRec(target.texture, 

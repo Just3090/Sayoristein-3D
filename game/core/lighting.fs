@@ -19,6 +19,9 @@ uniform vec3 u_cam_pos;
 uniform float u_fovy;
 uniform float u_flash_intensity;
 uniform float u_flashlight_active;
+uniform vec2 u_flashlight_offset;
+uniform float u_motion_blur_strength;
+uniform vec2 u_cam_velocity;
 
 out vec4 finalColor;
 
@@ -235,36 +238,75 @@ void main()
             }
         }
     }
-    else
+
+    float sunAngle = ((t - 6.0) / 24.0) * 6.28318530718;
+    float sunElev = sin(sunAngle);
+
+    float dayFactor = clamp(sunElev * 1.5 + 0.3, 0.0, 1.0);
+    float brightness = mix(0.22, 1.0, dayFactor);
+
+    float sunsetFactor = smoothstep(-0.25, 0.15, sunElev) * smoothstep(0.65, 0.15, sunElev);
+
+    vec3 nightTint = vec3(0.45, 0.55, 0.85);
+    vec3 dayTint = vec3(1.0, 1.0, 1.0);
+    vec3 sunsetTint = vec3(1.05, 0.75, 0.55);
+
+    vec3 tint = mix(nightTint, dayTint, dayFactor);
+    tint = mix(tint, sunsetTint, sunsetFactor * 0.8);
+
+    if (texelColor.a > 0.0)
     {
-        float sunAngle = ((t - 6.0) / 24.0) * 6.28318530718;
-        float sunElev = sin(sunAngle);
-
-        float dayFactor = clamp(sunElev * 1.5 + 0.3, 0.0, 1.0);
-        float brightness = mix(0.22, 1.0, dayFactor);
-
-        float sunsetFactor = smoothstep(-0.25, 0.15, sunElev) * smoothstep(0.65, 0.15, sunElev);
-
-        vec3 nightTint = vec3(0.45, 0.55, 0.85);
-        vec3 dayTint = vec3(1.0, 1.0, 1.0);
-        vec3 sunsetTint = vec3(1.05, 0.75, 0.55);
-
-        vec3 tint = mix(nightTint, dayTint, dayFactor);
-        tint = mix(tint, sunsetTint, sunsetFactor * 0.8);
-
         result = result * tint * brightness;
 
         if (u_flash_intensity > 0.0)
         {
-            result += texelColor.rgb * vec3(1.4, 1.1, 0.7) * u_flash_intensity * 0.75;
+            result += texelColor.rgb * vec3(1.3, 1.05, 0.65) * u_flash_intensity * 0.7;
         }
 
         if (u_flashlight_active > 0.0)
         {
-            float flash_dist = distance(fragTexCoord, vec2(0.5, 0.5));
-            float spot = smoothstep(0.48, 0.05, flash_dist);
-            result += texelColor.rgb * vec3(1.2, 1.15, 1.0) * spot * 1.5 * u_flashlight_active;
+            vec2 spotCenter = vec2(0.5, 0.5) + u_flashlight_offset;
+            float flash_dist = distance(fragTexCoord, spotCenter);
+            float spot = smoothstep(0.44, 0.04, flash_dist);
+            result += texelColor.rgb * vec3(1.12, 1.08, 0.95) * spot * 0.85 * u_flashlight_active;
         }
+    }
+
+    if (u_motion_blur_strength > 0.0 && length(u_cam_velocity) > 0.001)
+    {
+        vec2 blurDir = clamp(u_cam_velocity * u_motion_blur_strength * 0.0035, vec2(-0.035), vec2(0.035));
+        vec3 blurSum = result;
+        float totalWeight = 1.0;
+        
+        const int SAMPLES = 6;
+        for (int i = 1; i <= SAMPLES; i++)
+        {
+            float stepVal = float(i) / float(SAMPLES);
+            float weight = 1.0 - stepVal * 0.6;
+            vec2 offsetA = clamp(fragTexCoord + blurDir * stepVal, vec2(0.001), vec2(0.999));
+            vec2 offsetB = clamp(fragTexCoord - blurDir * stepVal, vec2(0.001), vec2(0.999));
+            
+            vec4 colA = texture(texture0, offsetA);
+            vec4 colB = texture(texture0, offsetB);
+            
+            vec3 litA = (colA.a > 0.0) ? (colA.rgb * tint * brightness) : result;
+            vec3 litB = (colB.a > 0.0) ? (colB.rgb * tint * brightness) : result;
+            
+            if (u_flashlight_active > 0.0)
+            {
+                vec2 spotCenter = vec2(0.5, 0.5) + u_flashlight_offset;
+                float spotA = smoothstep(0.44, 0.04, distance(offsetA, spotCenter));
+                float spotB = smoothstep(0.44, 0.04, distance(offsetB, spotCenter));
+                if (colA.a > 0.0) litA += colA.rgb * vec3(1.12, 1.08, 0.95) * spotA * 0.85 * u_flashlight_active;
+                if (colB.a > 0.0) litB += colB.rgb * vec3(1.12, 1.08, 0.95) * spotB * 0.85 * u_flashlight_active;
+            }
+            
+            blurSum += (litA + litB) * 0.5 * weight;
+            totalWeight += weight;
+        }
+        
+        float blurFactor = clamp(length(u_cam_velocity) * u_motion_blur_strength * 0.08, 0.0, 0.65);
+        result = mix(result, blurSum / totalWeight, blurFactor);
     }
 
     if (u_rain_intensity > 0.0)
@@ -275,13 +317,6 @@ void main()
         float rainVal = n1 + n2;
 
         result = mix(result, vec3(0.7, 0.8, 0.9), rainVal * u_rain_intensity * 0.4);
-    }
-
-    if (shadows_enabled != 0)
-    {
-        float dist = distance(fragTexCoord, vec2(0.5, 0.5));
-        float vignette = smoothstep(0.8, 0.3, dist);
-        result *= vignette;
     }
 
     if (u_bloom != 0)
@@ -298,6 +333,13 @@ void main()
         {
             result += sum * 0.5;
         }
+    }
+
+    if (shadows_enabled != 0)
+    {
+        float dist = distance(fragTexCoord, vec2(0.5, 0.5));
+        float vignette = smoothstep(0.8, 0.3, dist);
+        result *= vignette;
     }
 
     finalColor = vec4(result, 1.0);

@@ -416,8 +416,9 @@ init -10 python:
                     wp_yaw = float(t['yaw'])
                     wp_roll = float(t['roll'])
                     wp_scale = float(t['scale'])
+                    mb_strength = float(getattr(persistent, "stein_motion_blur_strength", 0.3))
                     
-                    data = struct.pack("iiii iiii iiii ff f i i i i i f i i iii i fff fff fff f", 
+                    data = struct.pack("iiii iiii iiii ff f i i i i i f i i iii i fff fff fff f f", 
                                         w_key, s_key, a_key, d_key,
                                         left_key, right_key, up_key, down_key,
                                         space_key, shift_key, ctrl_key, shoot_key,
@@ -428,7 +429,8 @@ init -10 python:
                                         aim_key, p_lvl, s_lvl, m_lvl, fl_val,
                                         wp_hip_x, wp_hip_y, wp_hip_z,
                                         wp_ads_x, wp_ads_y, wp_ads_z,
-                                        wp_pitch, wp_yaw, wp_roll, wp_scale)
+                                        wp_pitch, wp_yaw, wp_roll, wp_scale,
+                                        mb_strength)
                     self.process.stdin.write(data)
                     self.process.stdin.flush()
                     self.mouse_dx = 0.0
